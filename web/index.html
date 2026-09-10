@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HOMEbot · Remote Control</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="controller">
+      <header>
+        <span class="version">SOFTWARE PROTOTYPE · V0.1</span>
+        <h1>HOMEbot<span class="brand-dot">.</span></h1>
+        <p>Remote Control</p>
+      </header>
+
+      <section class="camera" aria-label="Camera placeholder">
+        <span class="camera-icon" aria-hidden="true">▣</span>
+        <h2>Camera Placeholder</h2>
+        <p>Camera will be added in Homebot v0.2</p>
+      </section>
+
+      <section aria-label="Movement controls">
+        <div class="section-label"><h2>Movement</h2><span>VIRTUAL MOTOR</span></div>
+        <div class="direction-pad">
+          <button class="forward" data-direction="forward"><span>↑</span>Forward</button>
+          <button class="left" data-direction="left"><span>←</span>Left</button>
+          <button class="stop" data-direction="stop">STOP</button>
+          <button class="right" data-direction="right"><span>→</span>Right</button>
+          <button class="backward" data-direction="backward"><span>↓</span>Backward</button>
+        </div>
+      </section>
+
+      <section class="speed-control">
+        <div class="section-label">
+          <label for="speed-slider">Speed</label>
+          <output id="selected-speed" for="speed-slider">50%</output>
+        </div>
+        <input id="speed-slider" type="range" min="0" max="100" value="50">
+        <div class="range-labels"><span>0%</span><span>100%</span></div>
+        <p class="hint">Applied on your next direction click.</p>
+      </section>
+
+      <section class="status-panel" aria-live="polite">
+        <div class="section-label">
+          <h2>Status</h2>
+          <span id="connection" class="connection">● Connecting…</span>
+        </div>
+        <dl>
+          <div><dt>Direction</dt><dd id="direction">—</dd></div>
+          <div><dt>Speed</dt><dd id="current-speed">—</dd></div>
+          <div><dt>Battery</dt><dd id="battery">—</dd></div>
+        </dl>
+        <p id="error-message" role="alert" hidden></p>
+      </section>
+      <footer>No physical robot required. Just a little curiosity.</footer>
+    </main>
+  </body>
+</html>
