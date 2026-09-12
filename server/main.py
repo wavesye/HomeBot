@@ -1,14 +1,25 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from server.motor import MotorController, MockMotorController
+from server.camera import CameraController
 
-app = FastAPI(title="Homebot", version="0.1.0")
+camera = CameraController()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    camera.stop()  # 服务退出时释放摄像头。
+
+
+app = FastAPI(title="Homebot", version="0.2.0", lifespan=lifespan)
 motor: MotorController = MockMotorController()
 
 # 状态只存在当前进程的内存里；重启服务后恢复初始值。
@@ -42,6 +53,31 @@ async def move(command: MoveRequest):
     status["direction"] = command.direction
     status["speed"] = 0 if command.direction == "stop" else command.speed
     return status
+
+
+# 普通 def 让读摄像头在工作线程中执行，不阻塞移动指令的处理。
+@app.post("/api/camera/start")
+def start_camera():
+    try:
+        camera.start()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"active": True}
+
+
+@app.get("/api/camera/frame")
+def camera_frame():
+    try:
+        jpeg = camera.get_frame()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/camera/stop")
+def stop_camera():
+    camera.stop()
+    return {"active": False}
 
 
 # 用同一个服务提供网页，浏览器可直接请求同源的 /api/move。

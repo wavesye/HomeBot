@@ -10,15 +10,20 @@
   <body>
     <main class="controller">
       <header>
-        <span class="version">SOFTWARE PROTOTYPE · V0.1</span>
+        <span class="version">VIRTUAL MOTOR · V0.2</span>
         <h1>HOMEbot<span class="brand-dot">.</span></h1>
         <p>Remote Control</p>
       </header>
 
-      <section class="camera" aria-label="Camera placeholder">
-        <span class="camera-icon" aria-hidden="true">▣</span>
-        <h2>Camera Placeholder</h2>
-        <p>Camera will be added in Homebot v0.2</p>
+      <section class="camera" aria-label="Camera preview">
+        <h2>Camera Preview</h2>
+        <img id="camera-image" alt="Live view from the server computer camera" hidden>
+        <p id="camera-status" aria-live="polite">Camera is off.</p>
+        <div class="camera-actions">
+          <button id="start-camera" type="button">Start camera</button>
+          <button id="stop-camera" type="button">Stop camera</button>
+        </div>
+        <p>Uses the camera on the computer running Homebot.</p>
       </section>
 
       <section aria-label="Movement controls">

@@ -23,8 +23,7 @@ h1 { margin: 10px 0 0; font-size: 42px; letter-spacing: -2px; }
 header p { margin: 4px 0 0; color: #718078; font-size: 14px; }
 h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .camera {
-  display: grid;
-  place-content: center;
+  padding: 20px 12px;
   min-height: 156px;
   text-align: center;
   border: 1px dashed #c6d3c8;
@@ -32,7 +31,10 @@ h2 { margin: 0; font-size: 14px; font-weight: 600; }
   background: #f3f6f0;
   margin-bottom: 24px;
 }
-.camera-icon { color: #839589; font-size: 28px; margin-bottom: 8px; }
+.camera img { display: block; width: 100%; border-radius: 8px; margin-top: 12px; }
+.camera img[hidden] { display: none; }
+.camera-actions { display: flex; justify-content: center; gap: 8px; margin-top: 12px; }
+.camera-actions button { height: 36px; padding: 0 12px; }
 .camera p { margin: 8px 0 0; color: #718078; font-size: 11px; }
 .section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-label > span:not(.connection) { color: #7b887f; font-size: 9px; letter-spacing: 1px; }
