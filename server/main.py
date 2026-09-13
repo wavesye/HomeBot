@@ -15,11 +15,13 @@ camera = CameraController()
 
 @asynccontextmanager
 async def lifespan(app):
-    yield
-    camera.stop()  # 服务退出时释放摄像头。
+    try:
+        yield
+    finally:
+        camera.stop()  # 正常退出或异常退出时都尝试释放摄像头。
 
 
-app = FastAPI(title="Homebot", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Homebot", version="0.3.0", lifespan=lifespan)
 motor: MotorController = MockMotorController()
 
 # 状态只存在当前进程的内存里；重启服务后恢复初始值。

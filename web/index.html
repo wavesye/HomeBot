@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>HOMEbot · Remote Control</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script src="/static/app.js" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=0.3.0">
+    <script src="/static/app.js?v=0.3.0" defer></script>
   </head>
   <body>
     <main class="controller">
       <header>
-        <span class="version">VIRTUAL MOTOR · V0.2</span>
+        <span class="version">VIRTUAL MOTOR · V0.3</span>
         <h1>HOMEbot<span class="brand-dot">.</span></h1>
         <p>Remote Control</p>
       </header>
@@ -24,6 +24,11 @@
           <button id="stop-camera" type="button">Stop camera</button>
         </div>
         <p>Uses the camera on the computer running Homebot.</p>
+        <details class="camera-help">
+          <summary>Camera not working?</summary>
+          <p>Check the camera connection and close other apps using it.</p>
+          <p>On macOS, activate the Python environment in the server terminal and run <code>python -m server.camera --check</code>. Allow camera access if prompted, run the check again, then retry Start camera.</p>
+        </details>
       </section>
 
       <section aria-label="Movement controls">
@@ -35,6 +40,7 @@
           <button class="right" data-direction="right"><span>→</span>Right</button>
           <button class="backward" data-direction="backward"><span>↓</span>Backward</button>
         </div>
+        <p class="keyboard-help"><kbd>W A S D</kbd> or <kbd>↑ ← ↓ →</kbd> · Hold to move, release to stop.<br><kbd>Space</kbd> stops. Click an empty area first if the speed slider is focused.</p>
       </section>
 
       <section class="speed-control">
@@ -44,7 +50,7 @@
         </div>
         <input id="speed-slider" type="range" min="0" max="100" value="50">
         <div class="range-labels"><span>0%</span><span>100%</span></div>
-        <p class="hint">Applied on your next direction click.</p>
+        <p class="hint">Applied on your next direction click or key press.</p>
       </section>
 
       <section class="status-panel" aria-live="polite">

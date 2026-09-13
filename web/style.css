@@ -36,6 +36,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .camera-actions { display: flex; justify-content: center; gap: 8px; margin-top: 12px; }
 .camera-actions button { height: 36px; padding: 0 12px; }
 .camera p { margin: 8px 0 0; color: #718078; font-size: 11px; }
+.camera-help { text-align: left; margin-top: 12px; font-size: 11px; line-height: 1.6; }
+.camera-help summary { cursor: pointer; }
+.camera-help code { overflow-wrap: anywhere; }
 .section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-label > span:not(.connection) { color: #7b887f; font-size: 9px; letter-spacing: 1px; }
 .direction-pad {
@@ -63,6 +66,7 @@ button {
 }
 button span { font-size: 23px; line-height: 1; }
 button:hover { background: #e5eddf; }
+button.keyboard-active { background: #d7e9dc; border-color: #348666; box-shadow: 0 0 0 2px #34866633; }
 button:active { transform: translateY(1px); }
 button:focus-visible, input:focus-visible { outline: 3px solid #7cb598; outline-offset: 3px; }
 button:disabled { opacity: 0.5; cursor: wait; }
@@ -77,6 +81,8 @@ output { color: #2e7456; font-weight: 600; font-size: 14px; }
 input[type="range"] { width: 100%; margin: 18px 0 6px; accent-color: #348666; cursor: pointer; }
 .range-labels { display: flex; justify-content: space-between; font-size: 10px; color: #718078; }
 .hint { margin: 8px 0 20px; font-size: 11px; color: #718078; }
+.keyboard-help { margin: -8px 0 24px; font-size: 11px; line-height: 1.8; color: #596e61; text-align: center; }
+kbd { padding: 2px 5px; border: 1px solid #dbe3d8; border-radius: 4px; background: #f3f6f0; font: inherit; }
 .status-panel { border-top: 1px solid #e4e8df; padding-top: 18px; }
 .connection { font-size: 11px; color: #728079; }
 .connection.connected { color: #348666; }
