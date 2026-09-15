@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>HOMEbot · Remote Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=0.3.0">
-    <script src="/static/app.js?v=0.3.0" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=0.4.0">
+    <script src="/static/app.js?v=0.4.0" defer></script>
   </head>
   <body>
     <main class="controller">
       <header>
-        <span class="version">VIRTUAL MOTOR · V0.3</span>
+        <span class="version">VIRTUAL MOTOR · V0.4</span>
         <h1>HOMEbot<span class="brand-dot">.</span></h1>
         <p>Remote Control</p>
       </header>
@@ -41,6 +41,7 @@
           <button class="backward" data-direction="backward"><span>↓</span>Backward</button>
         </div>
         <p class="keyboard-help"><kbd>W A S D</kbd> or <kbd>↑ ← ↓ →</kbd> · Hold to move, release to stop.<br><kbd>Space</kbd> stops. Click an empty area first if the speed slider is focused.</p>
+        <p class="safety-help">Auto-stop after 2 seconds without a heartbeat.<br>Switching windows or tabs also stops movement.</p>
       </section>
 
       <section class="speed-control">
@@ -63,6 +64,7 @@
           <div><dt>Speed</dt><dd id="current-speed">—</dd></div>
           <div><dt>Battery</dt><dd id="battery">—</dd></div>
         </dl>
+        <p id="safety-status" class="safety-status">Checking auto-stop…</p>
         <p id="error-message" role="alert" hidden></p>
       </section>
       <footer>No physical robot required. Just a little curiosity.</footer>

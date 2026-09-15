@@ -82,6 +82,8 @@ input[type="range"] { width: 100%; margin: 18px 0 6px; accent-color: #348666; cu
 .range-labels { display: flex; justify-content: space-between; font-size: 10px; color: #718078; }
 .hint { margin: 8px 0 20px; font-size: 11px; color: #718078; }
 .keyboard-help { margin: -8px 0 24px; font-size: 11px; line-height: 1.8; color: #596e61; text-align: center; }
+.safety-help { margin: -12px 0 24px; font-size: 11px; line-height: 1.8; color: #596e61; text-align: center; }
+.safety-status { margin: 14px 0 0; font-size: 12px; line-height: 1.5; color: #596e61; }
 kbd { padding: 2px 5px; border: 1px solid #dbe3d8; border-radius: 4px; background: #f3f6f0; font: inherit; }
 .status-panel { border-top: 1px solid #e4e8df; padding-top: 18px; }
 .connection { font-size: 11px; color: #728079; }

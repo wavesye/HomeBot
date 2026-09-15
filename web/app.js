@@ -8,6 +8,15 @@ let sendingMove = false;
 let pendingMoves = [];
 let activeKey = null;
 let spaceHeld = false;
+let wantsMovement = false;
+let movementVersion = 0;
+let heartbeatCommandId = null;
+let heartbeatTimer;
+let statusTimer;
+let pageLeaving = false;
+
+const HEARTBEAT_INTERVAL_MS = 500;
+const STATUS_INTERVAL_MS = 1000;
 
 const keyDirections = {
   KeyW: "forward", ArrowUp: "forward",
@@ -30,6 +39,10 @@ function renderStatus(status) {
   document.querySelector("#direction").textContent = directionLabels[status.direction];
   document.querySelector("#current-speed").textContent = `${Math.round(status.speed * 100)}%`;
   document.querySelector("#battery").textContent = `${status.battery}%`;
+  const timeoutSeconds = status.watchdog_timeout_ms / 1000;
+  document.querySelector("#safety-status").textContent = status.stop_reason === "timeout"
+    ? "Auto-stopped: heartbeat lost. Use a direction control to move again."
+    : `Auto-stop ready · ${timeoutSeconds}s timeout${status.command_id ? " · Movement active" : ""}`;
   errorMessage.hidden = true;
 }
 
@@ -40,14 +53,73 @@ function showError() {
   document.querySelector("#direction").textContent = "—";
   document.querySelector("#current-speed").textContent = "—";
   document.querySelector("#battery").textContent = "—";
-  errorMessage.textContent = "Request failed. Check the server terminal, then click again or reload.";
+  document.querySelector("#safety-status").textContent = "Status unknown. Server auto-stop remains active.";
+  errorMessage.textContent = "Request failed. Heartbeats stopped. Check the server, then use a direction control to retry.";
   errorMessage.hidden = false;
 }
 
+function stopHeartbeat() {
+  clearTimeout(heartbeatTimer);
+  heartbeatCommandId = null;
+}
+
+function acceptStatus(status) {
+  // 别的页面接管或后端已超时后，不接续新动作，也不自动恢复旧动作。
+  if (heartbeatCommandId && status.command_id !== heartbeatCommandId) {
+    stopHeartbeat();
+    wantsMovement = false;
+    activeKey = null;
+    movementVersion += 1;
+    updateMovementButtons();
+  }
+  renderStatus(status);
+}
+
+async function sendHeartbeat(commandId, version) {
+  if (commandId !== heartbeatCommandId || version !== movementVersion || pageLeaving || document.hidden) return;
+  try {
+    const response = await fetch("/api/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: commandId }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) throw new Error("Heartbeat failed");
+    const status = await response.json();
+    if (commandId !== heartbeatCommandId || version !== movementVersion) return;
+    acceptStatus(status);
+    if (heartbeatCommandId === commandId) {
+      heartbeatTimer = setTimeout(() => sendHeartbeat(commandId, version), HEARTBEAT_INTERVAL_MS);
+    }
+  } catch (error) {
+    if (commandId !== heartbeatCommandId || version !== movementVersion) return;
+    activeKey = null;
+    showError();
+    sendMove("stop");
+  }
+}
+
 async function refreshStatus() {
-  const response = await fetch("/api/status", { signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error("Could not read status");
-  renderStatus(await response.json());
+  const version = movementVersion;
+  try {
+    if (sendingMove) return; // 移动处理中读到的旧状态不能撤销随后确认的动作。
+    const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error("Could not read status");
+    const status = await response.json();
+    // 轮询只观察；操作开始前发出的旧状态不能覆盖操作结果。
+    if (version === movementVersion && !sendingMove && !pageLeaving) acceptStatus(status);
+  } catch (error) {
+    if (version !== movementVersion || sendingMove || pageLeaving) return;
+    showError();
+    if (wantsMovement) {
+      activeKey = null;
+      sendMove("stop");
+    }
+  } finally {
+    clearTimeout(statusTimer);
+    if (!document.hidden && !pageLeaving) statusTimer = setTimeout(refreshStatus, STATUS_INTERVAL_MS);
+  }
 }
 
 function updateMovementButtons() {
@@ -60,11 +132,15 @@ function updateMovementButtons() {
 
 function sendMove(direction) {
   if (!controlsReady) return;
-  // STOP 清掉还没发出的移动指令；正在发送的一条结束后，下一条就是 STOP。
+  // 新操作先结束旧动作的续期；等待中的 STOP 也不会被丢弃。
+  stopHeartbeat();
+  wantsMovement = direction !== "stop";
+  movementVersion += 1;
   if (direction === "stop") pendingMoves = [];
   pendingMoves.push({
     direction,
     speed: direction === "stop" ? 0 : Number(speedSlider.value) / 100,
+    version: movementVersion,
   });
   if (!sendingMove) processMoves();
 }
@@ -78,17 +154,28 @@ async function processMoves() {
       const response = await fetch("/api/move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(command),
+        body: JSON.stringify({ direction: command.direction, speed: command.speed }),
+        keepalive: command.direction === "stop",
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error("Move request failed");
-      // 状态来自后端的执行结果，不是按键对应的猜测值。
-      renderStatus(await response.json());
+      const status = await response.json();
+      if (command.version !== movementVersion || pageLeaving) continue;
+      renderStatus(status);
+      // 只续期本页刚确认的动作，轮询读到的其他动作不会获得心跳。
+      if (wantsMovement && status.command_id && !document.hidden) {
+        heartbeatCommandId = status.command_id;
+        heartbeatTimer = setTimeout(() => sendHeartbeat(status.command_id, command.version), HEARTBEAT_INTERVAL_MS);
+      }
     } catch (error) {
+      if (pageLeaving) break;
       activeKey = null;
+      wantsMovement = false;
+      stopHeartbeat();
+      movementVersion += 1;
       showError();
       // 移动失败时尝试一次停止；停止也失败就留给用户重试，避免无限请求。
-      pendingMoves = command.direction === "stop" ? [] : [{ direction: "stop", speed: 0 }];
+      pendingMoves = command.direction === "stop" ? [] : [{ direction: "stop", speed: 0, version: movementVersion }];
     }
   }
   sendingMove = false;
@@ -109,7 +196,7 @@ buttons.forEach((button) => {
 
 // 先读取初始状态，再启用按钮，避免初始读取覆盖刚执行的动作。
 updateMovementButtons();
-refreshStatus().catch(showError).finally(() => {
+refreshStatus().finally(() => {
   controlsReady = true;
   updateMovementButtons();
 });
@@ -153,18 +240,41 @@ document.addEventListener("keyup", (event) => {
   sendMove("stop");
 });
 
-function releaseKeyboardControl() {
+function releaseMovementControl() {
   spaceHeld = false;
-  if (activeKey === null) return;
+  if (!wantsMovement) return;
   activeKey = null;
   updateMovementButtons();
   sendMove("stop");
 }
 
-// 切换窗口或标签页可能收不到 keyup，因此也要结束当前键盘动作。
-window.addEventListener("blur", releaseKeyboardControl);
+// 鼠标与键盘都在失焦时停止；断网时由后端超时停止兜底。
+window.addEventListener("blur", releaseMovementControl);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) releaseKeyboardControl();
+  clearTimeout(statusTimer);
+  if (document.hidden) releaseMovementControl();
+  else if (!pageLeaving) refreshStatus();
+});
+window.addEventListener("pagehide", () => {
+  pageLeaving = true;
+  clearTimeout(statusTimer);
+  stopHeartbeat();
+  movementVersion += 1;
+  activeKey = null;
+  spaceHeld = false;
+  // 页面关闭时不等待正在发送的移动；迟到的回复也不能重新开启心跳。
+  if (wantsMovement || sendingMove) {
+    navigator.sendBeacon("/api/move", new Blob([
+      JSON.stringify({ direction: "stop", speed: 0 }),
+    ], { type: "application/json" }));
+  }
+  wantsMovement = false;
+  pendingMoves = [];
+});
+window.addEventListener("pageshow", () => {
+  if (!pageLeaving) return;
+  pageLeaving = false;
+  refreshStatus(); // 从浏览器往返缓存恢复时只刷新状态，不恢复移动。
 });
 
 // 摄像头是独立的数据流：GET 图片 → 显示 → 200ms 后再取下一张。

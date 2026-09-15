@@ -7,7 +7,7 @@ const vm = require("node:vm");
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function setup() {
+async function setup(statusOverrides = {}) {
   function element(tagName = "DIV") {
     return {
       tagName, value: "50", disabled: false, hidden: true, textContent: "", dataset: {},
@@ -31,7 +31,17 @@ async function setup() {
   const windowListeners = {};
   const requests = [];
   const waiting = [];
-  const initialStatus = { connected: true, direction: "stop", speed: 0, battery: 100 };
+  const initialStatus = { connected: true, direction: "stop", speed: 0, battery: 100,
+    command_id: null, stop_reason: null, watchdog_timeout_ms: 2000, ...statusOverrides };
+  let serverStatus = initialStatus;
+  let commandCount = 0;
+  const heartbeats = [];
+  const waitingHeartbeats = [];
+  const waitingStatus = [];
+  const beacons = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  let deferStatus = false;
   const document = {
     hidden: false,
     querySelector: get,
@@ -40,10 +50,20 @@ async function setup() {
   };
   const context = vm.createContext({
     document,
-    window: { addEventListener(name, handler) { windowListeners[name] = handler; } },
-    AbortSignal, setTimeout, clearTimeout, URL,
+    window: { addEventListener(name, handler) { (windowListeners[name] ||= []).push(handler); } },
+    navigator: { sendBeacon(path, body) { beacons.push({ path, body }); return true; } },
+    AbortSignal, URL, Blob,
+    setTimeout(handler, delay) { timers.set(++nextTimer, { handler, delay }); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); },
     fetch(path, options) {
-      if (path === "/api/status") return Promise.resolve({ ok: true, json: async () => initialStatus });
+      if (path === "/api/status") {
+        if (deferStatus) return new Promise((resolve, reject) => waitingStatus.push({ resolve, reject }));
+        return Promise.resolve({ ok: true, json: async () => serverStatus });
+      }
+      if (path === "/api/heartbeat") {
+        heartbeats.push(JSON.parse(options.body));
+        return new Promise((resolve, reject) => waitingHeartbeats.push({ resolve, reject }));
+      }
       assert.equal(path, "/api/move");
       const command = JSON.parse(options.body);
       requests.push(command);
@@ -54,7 +74,31 @@ async function setup() {
   await tick();
 
   return {
-    get, buttons, requests,
+    get, buttons, requests, heartbeats, beacons,
+    deferStatus() { deferStatus = true; },
+    setServerStatus(status) { serverStatus = { ...serverStatus, ...status }; },
+    timerCount(delay) { return [...timers.values()].filter((timer) => timer.delay === delay).length; },
+    async runTimer(delay) {
+      const timer = [...timers].find(([, value]) => value.delay === delay);
+      assert.ok(timer, `Expected a ${delay}ms timer`);
+      timers.delete(timer[0]);
+      timer[1].handler();
+      await tick();
+    },
+    async replyHeartbeat(status = serverStatus, fail = false) {
+      const request = waitingHeartbeats.shift();
+      assert.ok(request, "Expected an outstanding heartbeat");
+      if (fail) request.reject(new Error("Test heartbeat failure"));
+      else request.resolve({ ok: true, json: async () => status });
+      await tick();
+    },
+    async replyStatus(status = serverStatus, fail = false) {
+      const request = waitingStatus.shift();
+      assert.ok(request, "Expected an outstanding status read");
+      if (fail) request.reject(new Error("Test status failure"));
+      else request.resolve({ ok: true, json: async () => status });
+      await tick();
+    },
     key(type, code, options = {}) {
       const event = { code, target: element("BODY"), repeat: false, preventDefault() { this.prevented = true; }, ...options };
       for (const handler of listeners[type]) handler(event);
@@ -65,10 +109,21 @@ async function setup() {
       const request = waiting.shift();
       assert.ok(request, "Expected an outstanding move request");
       if (fail) request.reject(new Error("Test network failure"));
-      else request.resolve({ ok: true, json: async () => ({ ...initialStatus, ...request.command }) });
+      else {
+        serverStatus = { ...initialStatus, ...request.command,
+          command_id: request.command.direction === "stop" ? null : `command-${++commandCount}`,
+          stop_reason: request.command.direction === "stop" ? "manual" : null };
+        request.resolve({ ok: true, json: async () => serverStatus });
+      }
       await tick();
     },
-    blur() { windowListeners.blur(); },
+    blur() { for (const handler of windowListeners.blur) handler(); },
+    pagehide() { for (const handler of windowListeners.pagehide) handler(); },
+    pageshow() { for (const handler of windowListeners.pageshow) handler(); },
+    show() {
+      document.hidden = false;
+      for (const handler of listeners.visibilitychange) handler();
+    },
     hide() {
       document.hidden = true;
       for (const handler of listeners.visibilitychange) handler();
@@ -213,4 +268,176 @@ test("network failure drops waiting movement and attempts STOP only once", async
   page.key("keydown", "KeyA");
   await page.reply();
   assert.equal(page.get("#direction").textContent, "Left");
+});
+
+test("confirmed movement sends heartbeats without repeating moves and stops renewing on release", async () => {
+  const page = await setup();
+  assert.equal(page.timerCount(500), 0);
+  page.key("keydown", "KeyW");
+  assert.equal(page.timerCount(500), 0);
+  await page.reply();
+  for (let i = 0; i < 3; i++) {
+    await page.runTimer(500);
+    assert.deepEqual(page.heartbeats.at(-1), { command_id: "command-1" });
+    assert.equal(page.timerCount(500), 0, "Do not overlap heartbeat requests");
+    await page.replyHeartbeat();
+  }
+  assert.equal(page.requests.length, 1);
+  page.key("keyup", "KeyW");
+  assert.equal(page.timerCount(500), 0, "Cancel renewal before STOP is acknowledged");
+  await page.reply();
+});
+
+test("reading another page's movement never adopts its heartbeat token", async () => {
+  const page = await setup({ direction: "forward", speed: 0.5, command_id: "other-page" });
+  assert.equal(page.get("#direction").textContent, "Forward");
+  await page.runTimer(1000);
+  assert.equal(page.timerCount(500), 0);
+  assert.equal(page.heartbeats.length, 0);
+  page.click("left");
+  await page.reply();
+  await page.runTimer(500);
+  assert.deepEqual(page.heartbeats[0], { command_id: "command-1" });
+  await page.replyHeartbeat();
+});
+
+test("an expired heartbeat response stops renewal and held keys cannot resume", async () => {
+  const page = await setup();
+  page.key("keydown", "KeyW");
+  await page.reply();
+  await page.runTimer(500);
+  await page.replyHeartbeat({ connected: true, direction: "stop", speed: 0, battery: 100,
+    command_id: null, stop_reason: "timeout", watchdog_timeout_ms: 2000 });
+  assert.equal(page.timerCount(500), 0);
+  assert.equal(page.get("#direction").textContent, "Stop");
+  assert.match(page.get("#safety-status").textContent, /Auto-stopped/);
+  page.key("keydown", "KeyW", { repeat: true });
+  page.key("keyup", "KeyW");
+  assert.equal(page.requests.length, 1);
+  page.key("keydown", "KeyW");
+  await page.reply();
+  assert.equal(page.timerCount(500), 1);
+});
+
+test("heartbeat failure attempts STOP once and reconnecting only refreshes status", async () => {
+  const page = await setup();
+  page.click("forward");
+  await page.reply();
+  await page.runTimer(500);
+  await page.replyHeartbeat(undefined, true);
+  assert.equal(page.requests.at(-1).direction, "stop");
+  assert.equal(page.timerCount(500), 0);
+  await page.reply(true);
+  page.setServerStatus({ direction: "stop", speed: 0, command_id: null, stop_reason: "timeout" });
+  await page.runTimer(1000);
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.get("#direction").textContent, "Stop");
+  assert.equal(page.timerCount(500), 0);
+});
+
+test("a late heartbeat success or failure cannot overwrite STOP or a newer move", async () => {
+  for (const next of ["stop", "left"]) {
+    for (const fail of [false, true]) {
+      const page = await setup();
+      page.click("forward");
+      await page.reply();
+      await page.runTimer(500);
+      page.click(next);
+      await page.reply();
+      await page.replyHeartbeat({ connected: true, direction: "forward", speed: 0.5,
+        battery: 100, command_id: "command-1", stop_reason: null, watchdog_timeout_ms: 2000 }, fail);
+      assert.equal(page.requests.length, 2);
+      assert.equal(page.get("#direction").textContent, next === "stop" ? "Stop" : "Left");
+      assert.equal(page.timerCount(500), next === "stop" ? 0 : 1);
+    }
+  }
+});
+
+test("a poll that began before movement cannot cancel the new movement", async () => {
+  const page = await setup();
+  page.deferStatus();
+  await page.runTimer(1000);
+  page.click("forward");
+  await page.reply();
+  await page.replyStatus({ connected: true, direction: "stop", speed: 0, battery: 100,
+    command_id: null, stop_reason: "manual", watchdog_timeout_ms: 2000 });
+  assert.equal(page.get("#direction").textContent, "Forward");
+  assert.equal(page.timerCount(500), 1);
+});
+
+test("polling skips an outstanding move so an old stop cannot cancel its later success", async () => {
+  const page = await setup();
+  page.click("forward");
+  await page.runTimer(1000);
+  await page.reply();
+  assert.equal(page.get("#direction").textContent, "Forward");
+  assert.equal(page.timerCount(500), 1);
+});
+
+test("polling notices timeout or another controller and never renews that movement", async () => {
+  for (const command_id of [null, "other-controller"]) {
+    const page = await setup();
+    page.click("forward");
+    await page.reply();
+    page.setServerStatus({ command_id, direction: command_id ? "left" : "stop", speed: command_id ? 0.3 : 0,
+      stop_reason: command_id ? null : "timeout" });
+    await page.runTimer(1000);
+    assert.equal(page.timerCount(500), 0);
+    assert.equal(page.get("#direction").textContent, command_id ? "Left" : "Stop");
+    assert.equal(page.requests.length, 1);
+  }
+});
+
+test("status read failure during movement also cancels heartbeats and attempts STOP", async () => {
+  const page = await setup();
+  page.click("forward");
+  await page.reply();
+  page.deferStatus();
+  await page.runTimer(1000);
+  await page.replyStatus(undefined, true);
+  assert.equal(page.timerCount(500), 0);
+  assert.equal(page.requests.at(-1).direction, "stop");
+  await page.reply();
+});
+
+test("blur and hidden tabs stop mouse movement, including a late move response", async () => {
+  for (const event of ["blur", "hide"]) {
+    for (const slow of [false, true]) {
+      const page = await setup();
+      page.click("forward");
+      if (!slow) await page.reply();
+      page[event]();
+      page[event]();
+      assert.equal(page.timerCount(500), 0);
+      if (slow) await page.reply();
+      assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+      await page.reply();
+      assert.equal(page.timerCount(500), 0);
+      assert.equal(page.get("#direction").textContent, "Stop");
+      page.show();
+      await tick();
+      assert.equal(page.requests.length, 2);
+    }
+  }
+});
+
+test("page exit beacons STOP and late replies or page restoration do not restart renewal", async () => {
+  for (const slow of [false, true]) {
+    const page = await setup();
+    page.click("forward");
+    if (!slow) await page.reply();
+    page.pagehide();
+    assert.equal(page.beacons.length, 1);
+    assert.equal(page.beacons[0].path, "/api/move");
+    assert.deepEqual(JSON.parse(await page.beacons[0].body.text()), { direction: "stop", speed: 0 });
+    assert.equal(page.beacons[0].body.type, "application/json");
+    if (slow) await page.reply();
+    assert.equal(page.timerCount(500), 0);
+    assert.equal(page.timerCount(1000), 0);
+    page.pageshow();
+    await tick();
+    assert.equal(page.timerCount(1000), 1);
+    assert.equal(page.timerCount(500), 0);
+    assert.equal(page.requests.length, 1);
+  }
 });
