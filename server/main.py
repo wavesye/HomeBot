@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from server.motor import MotorController, MockMotorController
 from server.camera import CameraController
+from server.access import AccessMiddleware
 
 camera = CameraController()
 motor: MotorController = MockMotorController()
@@ -70,7 +71,8 @@ async def lifespan(app):
                 camera.stop()  # 退出时先停电机，再释放摄像头。
 
 
-app = FastAPI(title="Homebot", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Homebot", version="0.5.0", lifespan=lifespan)
+app.add_middleware(AccessMiddleware)
 
 
 class MoveRequest(BaseModel):

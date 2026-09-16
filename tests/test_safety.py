@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import unittest
 from unittest.mock import Mock, call, patch
 from uuid import UUID
@@ -45,6 +46,9 @@ async def request(method, path, payload=None):
 
 class SafetyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.now = 100.0
         self.motor = Mock()
         self.camera = Mock()
@@ -86,7 +90,7 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_status_and_version(self):
         code, data = await request("GET", "/api/status")
         self.assertEqual(code, 200)
-        self.assertEqual(main.app.version, "0.4.0")
+        self.assertEqual(main.app.version, "0.5.0")
         self.assertEqual(data, {
             "connected": True, "direction": "stop", "speed": 0, "battery": 100,
             "command_id": None, "stop_reason": None, "watchdog_timeout_ms": 2000,

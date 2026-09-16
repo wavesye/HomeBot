@@ -7,14 +7,24 @@ const vm = require("node:vm");
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function setup(statusOverrides = {}) {
+async function setup(statusOverrides = {}, options = {}) {
   function element(tagName = "DIV") {
-    return {
+    const node = {
       tagName, value: "50", disabled: false, hidden: true, textContent: "", dataset: {},
-      classes: new Set(), listeners: {},
+      classes: new Set(), listeners: {}, capturedPointers: new Set(),
       addEventListener(name, handler) { this.listeners[name] = handler; },
-      classList: { toggle() {} },
+      setPointerCapture(id) {
+        if (this.captureFails) throw new Error("Pointer no longer active");
+        this.capturedPointers.add(id);
+      },
+      hasPointerCapture(id) { return this.capturedPointers.has(id); },
+      releasePointerCapture(id) {
+        this.capturedPointers.delete(id);
+        this.listeners.lostpointercapture?.({ pointerId: id });
+      },
     };
+    node.classList = { toggle(name, enabled) { if (enabled) node.classes.add(name); else node.classes.delete(name); } };
+    return node;
   }
   const nodes = new Map();
   const get = (id) => {
@@ -39,6 +49,7 @@ async function setup(statusOverrides = {}) {
   const waitingHeartbeats = [];
   const waitingStatus = [];
   const beacons = [];
+  const requestSignals = [];
   const timers = new Map();
   let nextTimer = 0;
   let deferStatus = false;
@@ -52,10 +63,11 @@ async function setup(statusOverrides = {}) {
     document,
     window: { addEventListener(name, handler) { (windowListeners[name] ||= []).push(handler); } },
     navigator: { sendBeacon(path, body) { beacons.push({ path, body }); return true; } },
-    AbortSignal, URL, Blob,
+    AbortSignal: options.legacyTimeout ? {} : AbortSignal, AbortController, URL, Blob,
     setTimeout(handler, delay) { timers.set(++nextTimer, { handler, delay }); return nextTimer; },
     clearTimeout(id) { timers.delete(id); },
     fetch(path, options) {
+      requestSignals.push({ path, signal: options.signal });
       if (path === "/api/status") {
         if (deferStatus) return new Promise((resolve, reject) => waitingStatus.push({ resolve, reject }));
         return Promise.resolve({ ok: true, json: async () => serverStatus });
@@ -67,14 +79,14 @@ async function setup(statusOverrides = {}) {
       assert.equal(path, "/api/move");
       const command = JSON.parse(options.body);
       requests.push(command);
-      return new Promise((resolve, reject) => waiting.push({ resolve, reject, command }));
+      return new Promise((resolve, reject) => waiting.push({ resolve, reject, command, signal: options.signal }));
     },
   });
   vm.runInContext(readFileSync(join(__dirname, "../web/app.js"), "utf8"), context);
   await tick();
 
   return {
-    get, buttons, requests, heartbeats, beacons,
+    get, buttons, requests, heartbeats, beacons, requestSignals,
     deferStatus() { deferStatus = true; },
     setServerStatus(status) { serverStatus = { ...serverStatus, ...status }; },
     timerCount(delay) { return [...timers.values()].filter((timer) => timer.delay === delay).length; },
@@ -104,7 +116,32 @@ async function setup(statusOverrides = {}) {
       for (const handler of listeners[type]) handler(event);
       return event;
     },
-    click(direction) { buttons.find((button) => button.dataset.direction === direction).listeners.click(); },
+    pointer(type, direction, options = {}) {
+      const button = buttons.find((button) => button.dataset.direction === direction);
+      const event = { pointerId: 1, pointerType: "touch", button: 0, isPrimary: true,
+        target: button || element("BODY"), preventDefault() { this.prevented = true; }, ...options };
+      if (type === "lostpointercapture") button?.capturedPointers.delete(event.pointerId);
+      button?.listeners[type]?.(event);
+      for (const handler of listeners[type] || []) handler(event);
+      if (type === "pointerup" || type === "pointercancel") {
+        for (const node of buttons) if (node.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
+      }
+      return event;
+    },
+    click(direction, options = {}) {
+      const button = buttons.find((button) => button.dataset.direction === direction);
+      const event = { detail: 1, pointerType: "mouse", preventDefault() { this.prevented = true; }, ...options };
+      button.listeners.click(event);
+      return event;
+    },
+    async replyHeaders() {
+      const request = waiting.shift();
+      assert.ok(request, "Expected a move request awaiting headers");
+      request.resolve({ ok: true, json: () => new Promise((resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+      }) });
+      await tick();
+    },
     async reply(fail = false) {
       const request = waiting.shift();
       assert.ok(request, "Expected an outstanding move request");
@@ -440,4 +477,214 @@ test("page exit beacons STOP and late replies or page restoration do not restart
     assert.equal(page.timerCount(500), 0);
     assert.equal(page.requests.length, 1);
   }
+});
+
+test("touch and pen hold each direction at selected speed, then stop even outside the button", async () => {
+  for (const pointerType of ["touch", "pen"]) {
+    const page = await setup();
+    page.get("#speed-slider").value = "30";
+    for (const direction of ["forward", "backward", "left", "right"]) {
+      const button = page.buttons.find((button) => button.dataset.direction === direction);
+      assert.equal(page.pointer("pointerdown", direction, { pointerType }).prevented, true);
+      assert.deepEqual(page.requests.at(-1), { direction, speed: 0.3 });
+      assert.equal(button.disabled, false, "The held button stays enabled during a slow move");
+      assert.equal(button.hasPointerCapture(1), true);
+      assert.equal(button.classes.has("touch-active"), true);
+      await page.reply();
+      await page.runTimer(500);
+      await page.replyHeartbeat();
+      page.pointer("pointerup", null, { pointerType });
+      assert.equal(button.hasPointerCapture(1), false);
+      assert.equal(button.classes.has("touch-active"), false);
+      assert.equal(page.timerCount(500), 0);
+      assert.deepEqual(page.requests.at(-1), { direction: "stop", speed: 0 });
+      await page.reply();
+      const count = page.requests.length;
+      for (const clickType of [pointerType, undefined]) {
+        assert.equal(page.click(direction, { pointerType: clickType }).prevented, true);
+      }
+      assert.equal(page.requests.length, count, "Touch-generated clicks never restart movement");
+    }
+  }
+});
+
+test("a quick touch release queues STOP and a late movement response never starts heartbeats", async () => {
+  const page = await setup();
+  page.pointer("pointerdown", "forward");
+  page.pointer("pointerup", "forward");
+  page.click("forward", { pointerType: "touch" });
+  assert.equal(page.requests.length, 1);
+  await page.reply();
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+  assert.equal(page.timerCount(500), 0);
+  await page.reply();
+});
+
+test("pointer cancellation or lost capture stops only once and a later mouse click still works", async () => {
+  for (const ending of ["pointercancel", "lostpointercapture"]) {
+    const page = await setup();
+    page.pointer("pointerdown", "forward");
+    await page.reply();
+    page.pointer(ending, "forward");
+    page.pointer("pointerup", "forward");
+    page.pointer("lostpointercapture", "forward");
+    assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+    assert.equal(page.timerCount(500), 0);
+    await page.reply();
+    page.pointer("pointerdown", "forward", { pointerType: "mouse" });
+    page.pointer("pointerup", "forward", { pointerType: "mouse" });
+    assert.equal(page.requests.length, 2, "Mouse movement still begins on click");
+    page.click("forward");
+    await page.reply();
+    assert.equal(page.requests.at(-1).direction, "forward");
+    assert.equal(page.timerCount(500), 1);
+  }
+});
+
+test("extra fingers cannot change direction or click to move, but any finger can press STOP", async () => {
+  const page = await setup();
+  page.pointer("pointerdown", "forward");
+  await page.reply();
+  page.pointer("pointerdown", "left", { pointerId: 2, isPrimary: false });
+  page.pointer("pointerup", "left", { pointerId: 2, isPrimary: false });
+  page.click("left", { pointerType: undefined });
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.timerCount(500), 1);
+  page.pointer("pointerdown", "stop", { pointerId: 3, isPrimary: false });
+  assert.equal(page.requests.at(-1).direction, "stop");
+  assert.equal(page.timerCount(500), 0);
+  await page.reply();
+  page.pointer("pointerup", "stop", { pointerId: 3, isPrimary: false });
+  page.pointer("pointerup", "forward");
+  page.click("stop", { pointerType: "touch" });
+  page.click("forward", { pointerType: undefined });
+  assert.equal(page.requests.length, 2);
+});
+
+test("keyboard and touch can take over without releases from the old input stopping the new one", async () => {
+  const page = await setup();
+  page.key("keydown", "KeyW");
+  await page.reply();
+  page.pointer("pointerdown", "right");
+  await page.reply();
+  page.key("keyup", "KeyW");
+  assert.equal(page.requests.length, 2);
+  page.key("keydown", "KeyA");
+  await page.reply();
+  page.pointer("pointerup", "right");
+  page.click("right", { pointerType: undefined });
+  assert.equal(page.requests.length, 3);
+  assert.equal(page.get("#direction").textContent, "Left");
+  page.key("keyup", "KeyA");
+  await page.reply();
+  assert.equal(page.requests.at(-1).direction, "stop");
+});
+
+test("Space stops touch movement and blocks fresh touch presses until released", async () => {
+  const page = await setup();
+  page.pointer("pointerdown", "forward");
+  await page.reply();
+  page.key("keydown", "Space");
+  await page.reply();
+  page.pointer("pointerup", "forward");
+  page.pointer("pointerdown", "left");
+  page.pointer("pointerup", "left");
+  page.click("left", { pointerType: undefined });
+  assert.equal(page.requests.length, 2);
+  page.key("keyup", "Space");
+  page.pointer("pointerdown", "left");
+  await page.reply();
+  assert.equal(page.requests.at(-1).direction, "left");
+});
+
+test("request failures, timeout and another controller discard touch ownership", async () => {
+  for (const cause of ["move", "heartbeat", "status", "timeout", "takeover"]) {
+    const page = await setup();
+    page.pointer("pointerdown", "forward");
+    await page.reply(cause === "move");
+    if (cause === "heartbeat") {
+      await page.runTimer(500);
+      await page.replyHeartbeat(undefined, true);
+    } else if (cause === "status") {
+      page.deferStatus();
+      await page.runTimer(1000);
+      await page.replyStatus(undefined, true);
+    } else if (cause === "timeout" || cause === "takeover") {
+      page.setServerStatus({ command_id: cause === "timeout" ? null : "another-controller",
+        direction: cause === "timeout" ? "stop" : "left", speed: cause === "timeout" ? 0 : 0.3,
+        stop_reason: cause === "timeout" ? "timeout" : null });
+      await page.runTimer(1000);
+    }
+    assert.equal(page.buttons.some((button) => button.classes.has("touch-active")), false,
+      "Clear the held appearance before waiting for the fallback STOP");
+    if (["move", "heartbeat", "status"].includes(cause)) await page.reply();
+    const count = page.requests.length;
+    page.pointer("pointerup", "forward");
+    page.click("forward", { pointerType: undefined });
+    assert.equal(page.requests.length, count, "An old finger cannot stop another controller or restart movement");
+    assert.equal(page.timerCount(500), 0);
+    assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
+    assert.equal(page.buttons.some((button) => button.classes.has("touch-active")), false);
+  }
+});
+
+test("blur, hiding and leaving clear touch capture before late releases or responses", async () => {
+  for (const event of ["blur", "hide", "pagehide"]) {
+    for (const slow of [false, true]) {
+      const page = await setup();
+      page.pointer("pointerdown", "forward");
+      if (!slow) await page.reply();
+      page[event]();
+      page.pointer("pointerup", "forward");
+      page.click("forward", { pointerType: undefined });
+      if (slow) await page.reply();
+      assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
+      assert.equal(page.timerCount(500), 0);
+      if (event === "pagehide") {
+        assert.equal(page.beacons.length, 1);
+        assert.equal(page.requests.length, 1);
+      } else {
+        assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+        await page.reply();
+      }
+    }
+  }
+});
+
+test("capture failure leaves an existing keyboard action owned by its key", async () => {
+  const page = await setup();
+  page.key("keydown", "KeyW");
+  await page.reply();
+  page.buttons.find((button) => button.dataset.direction === "left").captureFails = true;
+  page.pointer("pointerdown", "left");
+  page.click("left", { pointerType: undefined });
+  assert.equal(page.requests.length, 1);
+  page.key("keyup", "KeyW");
+  assert.equal(page.requests.at(-1).direction, "stop");
+  await page.reply();
+});
+
+test("keyboard and assistive clicks remain available after a cancelled touch", async () => {
+  const page = await setup();
+  page.pointer("pointerdown", "left");
+  await page.reply();
+  page.pointer("pointercancel", "left");
+  await page.reply();
+  page.click("left", { detail: 0, pointerType: undefined });
+  await page.reply();
+  assert.equal(page.requests.at(-1).direction, "left");
+});
+
+test("the older-browser timeout fallback also aborts a stalled response body", async () => {
+  const page = await setup({}, { legacyTimeout: true });
+  page.pointer("pointerdown", "forward");
+  const signal = page.requestSignals.find((request) => request.path === "/api/move").signal;
+  await page.replyHeaders();
+  assert.equal(signal.aborted, false);
+  await page.runTimer(5000); // 初始 status 的计时器。
+  await page.runTimer(5000); // 已收到 headers、仍在读取正文的移动请求。
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+  assert.equal(page.timerCount(500), 0);
+  await page.reply();
 });

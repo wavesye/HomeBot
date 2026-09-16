@@ -7,6 +7,8 @@ let controlsReady = false;
 let sendingMove = false;
 let pendingMoves = [];
 let activeKey = null;
+let activePointer = null;
+const handledPointerClicks = new WeakSet();
 let spaceHeld = false;
 let wantsMovement = false;
 let movementVersion = 0;
@@ -17,6 +19,16 @@ let pageLeaving = false;
 
 const HEARTBEAT_INTERVAL_MS = 500;
 const STATUS_INTERVAL_MS = 1000;
+
+function timeoutSignal(milliseconds) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(milliseconds);
+  }
+  // 较早的手机浏览器也能超时中止；计时覆盖响应正文，不只覆盖 HTTP 头。
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), milliseconds);
+  return controller.signal;
+}
 
 const keyDirections = {
   KeyW: "forward", ArrowUp: "forward",
@@ -63,12 +75,24 @@ function stopHeartbeat() {
   heartbeatCommandId = null;
 }
 
+function clearPointerControl() {
+  const pointer = activePointer;
+  activePointer = null; // 先放弃归属，释放捕获产生的事件不能停止下一次操作。
+  if (!pointer) return;
+  try {
+    if (pointer.button.hasPointerCapture(pointer.id)) pointer.button.releasePointerCapture(pointer.id);
+  } catch (error) {
+    // 浏览器可能已经取消了这根指针或移除了捕获。
+  }
+}
+
 function acceptStatus(status) {
   // 别的页面接管或后端已超时后，不接续新动作，也不自动恢复旧动作。
   if (heartbeatCommandId && status.command_id !== heartbeatCommandId) {
     stopHeartbeat();
     wantsMovement = false;
     activeKey = null;
+    clearPointerControl();
     movementVersion += 1;
     updateMovementButtons();
   }
@@ -83,7 +107,7 @@ async function sendHeartbeat(commandId, version) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command_id: commandId }),
       cache: "no-store",
-      signal: AbortSignal.timeout(1500),
+      signal: timeoutSignal(1500),
     });
     if (!response.ok) throw new Error("Heartbeat failed");
     const status = await response.json();
@@ -104,7 +128,7 @@ async function refreshStatus() {
   const version = movementVersion;
   try {
     if (sendingMove) return; // 移动处理中读到的旧状态不能撤销随后确认的动作。
-    const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    const response = await fetch("/api/status", { cache: "no-store", signal: timeoutSignal(5000) });
     if (!response.ok) throw new Error("Could not read status");
     const status = await response.json();
     // 轮询只观察；操作开始前发出的旧状态不能覆盖操作结果。
@@ -124,19 +148,25 @@ async function refreshStatus() {
 
 function updateMovementButtons() {
   buttons.forEach((button) => {
-    // 等待请求时仍能点击 STOP，松键产生的停止指令也不会被丢弃。
-    button.disabled = !controlsReady || (sendingMove && button.dataset.direction !== "stop");
+    // 按住的按钮保持可用，慢请求期间仍能收到指针释放；STOP 始终可用。
+    button.disabled = !controlsReady || (sendingMove && button.dataset.direction !== "stop" && button !== activePointer?.button);
     button.classList.toggle("keyboard-active", button.dataset.direction === keyDirections[activeKey]);
+    button.classList.toggle("touch-active", button === activePointer?.button);
   });
 }
 
 function sendMove(direction) {
-  if (!controlsReady) return;
+  if (!controlsReady || pageLeaving) return;
   // 新操作先结束旧动作的续期；等待中的 STOP 也不会被丢弃。
   stopHeartbeat();
   wantsMovement = direction !== "stop";
   movementVersion += 1;
-  if (direction === "stop") pendingMoves = [];
+  if (direction === "stop") {
+    clearPointerControl();
+    activeKey = null;
+    pendingMoves = [];
+    updateMovementButtons();
+  }
   pendingMoves.push({
     direction,
     speed: direction === "stop" ? 0 : Number(speedSlider.value) / 100,
@@ -156,7 +186,7 @@ async function processMoves() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ direction: command.direction, speed: command.speed }),
         keepalive: command.direction === "stop",
-        signal: AbortSignal.timeout(5000),
+        signal: timeoutSignal(5000),
       });
       if (!response.ok) throw new Error("Move request failed");
       const status = await response.json();
@@ -170,9 +200,11 @@ async function processMoves() {
     } catch (error) {
       if (pageLeaving) break;
       activeKey = null;
+      clearPointerControl();
       wantsMovement = false;
       stopHeartbeat();
       movementVersion += 1;
+      updateMovementButtons();
       showError();
       // 移动失败时尝试一次停止；停止也失败就留给用户重试，避免无限请求。
       pendingMoves = command.direction === "stop" ? [] : [{ direction: "stop", speed: 0, version: movementVersion }];
@@ -187,12 +219,56 @@ speedSlider.addEventListener("input", () => {
 });
 
 buttons.forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch" && event.pointerType !== "pen") {
+      handledPointerClicks.delete(button); // 真正的鼠标按下开始新一次点击。
+      return;
+    }
+    // 即使是被忽略的第二根手指，也不能通过稍后的 click 启动移动。
+    handledPointerClicks.add(button);
+    event.preventDefault();
+    if (!controlsReady || pageLeaving || document.hidden) return;
+    if (button.dataset.direction === "stop") {
+      sendMove("stop");
+      return;
+    }
+    if (spaceHeld || activePointer || event.isPrimary === false || event.button !== 0 || button.disabled) return;
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch (error) {
+      return; // 无法保证收到松手事件时，不开始这次移动。
+    }
+    activePointer = { id: event.pointerId, button };
+    activeKey = null;
+    updateMovementButtons();
+    sendMove(button.dataset.direction);
+  });
+  button.addEventListener("lostpointercapture", releasePointerControl);
+  button.addEventListener("contextmenu", (event) => event.preventDefault());
+  button.addEventListener("click", (event) => {
+    // pointerup 后仍可能生成 click；兼容未携带 pointerType 的旧手机浏览器。
+    if (event.pointerType === "touch" || event.pointerType === "pen" || (event.detail !== 0 && handledPointerClicks.has(button))) {
+      event.preventDefault();
+      return;
+    }
+    if (!controlsReady || pageLeaving || document.hidden || button.disabled) return;
+    clearPointerControl();
     activeKey = null; // 鼠标接管后，松开先前的按键不会覆盖鼠标动作。
     updateMovementButtons();
     sendMove(button.dataset.direction);
   });
 });
+
+function releasePointerControl(event) {
+  if (event.pointerId !== activePointer?.id) return;
+  clearPointerControl();
+  updateMovementButtons();
+  sendMove("stop");
+}
+
+// 捕获使滑出按钮后的松手仍到达页面；取消也走同一条停止路径。
+document.addEventListener("pointerup", releasePointerControl);
+document.addEventListener("pointercancel", releasePointerControl);
 
 // 先读取初始状态，再启用按钮，避免初始读取覆盖刚执行的动作。
 updateMovementButtons();
@@ -221,6 +297,7 @@ document.addEventListener("keydown", (event) => {
   if (!direction) return;
   event.preventDefault();
   if (event.repeat || spaceHeld) return;
+  clearPointerControl();
   activeKey = event.code; // 后按下的方向接管，不组合方向。
   updateMovementButtons();
   sendMove(direction);
@@ -242,10 +319,10 @@ document.addEventListener("keyup", (event) => {
 
 function releaseMovementControl() {
   spaceHeld = false;
-  if (!wantsMovement) return;
   activeKey = null;
+  clearPointerControl();
   updateMovementButtons();
-  sendMove("stop");
+  if (wantsMovement) sendMove("stop");
 }
 
 // 鼠标与键盘都在失焦时停止；断网时由后端超时停止兜底。
@@ -261,7 +338,9 @@ window.addEventListener("pagehide", () => {
   stopHeartbeat();
   movementVersion += 1;
   activeKey = null;
+  clearPointerControl();
   spaceHeld = false;
+  updateMovementButtons();
   // 页面关闭时不等待正在发送的移动；迟到的回复也不能重新开启心跳。
   if (wantsMovement || sendingMove) {
     navigator.sendBeacon("/api/move", new Blob([
@@ -292,7 +371,7 @@ async function cameraRequest(path, method = "POST") {
     const response = await fetch(path, {
       method,
       cache: "no-store",
-      signal: AbortSignal.timeout(10000),
+      signal: timeoutSignal(10000),
     });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
