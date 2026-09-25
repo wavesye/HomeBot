@@ -12,7 +12,7 @@ from server import run
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
-        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": ""})
+        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": "", "HOMEBOT_MOTOR": "mock"})
         environment.start()
         self.addCleanup(environment.stop)
         server = patch.object(run.uvicorn, "run")
@@ -85,6 +85,25 @@ class LauncherTests(unittest.TestCase):
             with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 run.main(args)
             self.assertEqual(error.exception.code, 2)
+        self.server.assert_not_called()
+
+    def test_real_mode_requires_an_explicit_flag_even_with_old_environment(self):
+        os.environ["HOMEBOT_MOTOR"] = "tb6612"
+        output = self.launch([])
+        self.assertEqual(os.environ["HOMEBOT_MOTOR"], "mock")
+        self.assertIn("虚拟电机", output)
+
+    def test_explicit_tb6612_mode_selects_single_motor_without_reload(self):
+        output = self.launch(["--motor", "tb6612", "--lan"])
+        self.assertEqual(os.environ["HOMEBOT_MOTOR"], "tb6612")
+        self.assertIn("单电机", output)
+        self.assertIn("40%", output)
+        self.assertFalse(self.server.call_args.kwargs["reload"])
+        self.assertEqual(self.server.call_args.kwargs["workers"], 1)
+
+    def test_unknown_motor_is_rejected_without_opening_server(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            run.main(["--motor", "unknown"])
         self.server.assert_not_called()
 
     def test_port_boundaries_are_valid(self):

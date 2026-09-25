@@ -4,6 +4,10 @@
 class MotorController:
     """约定电机能做什么，让上层代码不需要了解具体硬件。"""
 
+    mode = "mock"
+    supported_directions = ("forward", "backward", "left", "right", "stop")
+    max_speed = 1.0
+
     def forward(self, speed: float):
         raise NotImplementedError
 
@@ -18,6 +22,9 @@ class MotorController:
 
     def stop(self):
         raise NotImplementedError
+
+    def close(self):
+        self.stop()
 
 
 class MockMotorController(MotorController):

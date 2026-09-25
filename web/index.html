@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>HOMEbot · Remote Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=0.5.0">
-    <script src="/static/app.js?v=0.5.0" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=0.6.0">
+    <script src="/static/app.js?v=0.6.0" defer></script>
   </head>
   <body>
     <main class="controller">
       <header>
-        <span class="version">VIRTUAL MOTOR · V0.5</span>
+        <span class="version">HOMEbot · V0.6</span>
         <h1>HOMEbot<span class="brand-dot">.</span></h1>
         <p>Remote Control · Local Wi-Fi</p>
       </header>
@@ -32,27 +32,28 @@
       </section>
 
       <section class="movement-control" aria-label="Movement controls">
-        <div class="section-label"><h2>Movement</h2><span>VIRTUAL MOTOR</span></div>
+        <div class="section-label"><h2>Movement</h2><span id="motor-mode">Checking controller…</span></div>
+        <p id="motor-help" class="motor-help">Waiting for controller capabilities.</p>
         <div class="direction-pad">
           <button class="forward" data-direction="forward"><span>↑</span>Forward</button>
           <button class="left" data-direction="left"><span>←</span>Left</button>
           <button class="stop" data-direction="stop">STOP</button>
           <button class="right" data-direction="right"><span>→</span>Right</button>
-          <button class="backward" data-direction="backward"><span>↓</span>Backward</button>
+          <button class="backward" data-direction="backward"><span>↓</span><span id="backward-name" class="direction-name">Backward</span></button>
         </div>
         <p class="touch-help">Touch: hold a direction, release to stop.<span class="mouse-help"><br>Mouse: click a direction, then STOP to finish.</span></p>
-        <p class="keyboard-help"><kbd>W A S D</kbd> or <kbd>↑ ← ↓ →</kbd> · Hold to move, release to stop.<br><kbd>Space</kbd> stops. Click an empty area first if the speed slider is focused.</p>
+        <p class="keyboard-help"><kbd id="keyboard-keys">W A S D</kbd> or <kbd id="keyboard-arrows">↑ ← ↓ →</kbd> · Hold to move, release to stop.<br><kbd>Space</kbd> stops. Click an empty area first if the speed slider is focused.</p>
         <p class="safety-help">Auto-stop after 2 seconds without a heartbeat.<br>Switching windows or tabs also stops movement.</p>
       </section>
 
       <section class="speed-control">
         <div class="section-label">
-          <label for="speed-slider">Speed</label>
+          <label id="speed-label" for="speed-slider">Output setting</label>
           <output id="selected-speed" for="speed-slider">50%</output>
         </div>
         <input id="speed-slider" type="range" min="0" max="100" value="50">
-        <div class="range-labels"><span>0%</span><span>100%</span></div>
-        <p class="hint">Applied on your next direction press.</p>
+        <div class="range-labels"><span>0%</span><span id="maximum-speed">—</span></div>
+        <p id="speed-help" class="hint">Waiting for the controller output limit.</p>
       </section>
 
       <section class="status-panel" aria-live="polite">
@@ -61,14 +62,14 @@
           <span id="connection" class="connection">● Connecting…</span>
         </div>
         <dl>
-          <div><dt>Direction</dt><dd id="direction">—</dd></div>
-          <div><dt>Speed</dt><dd id="current-speed">—</dd></div>
+          <div><dt id="direction-label">Direction</dt><dd id="direction">—</dd></div>
+          <div><dt id="current-speed-label">Output command</dt><dd id="current-speed">—</dd></div>
           <div><dt>Battery</dt><dd id="battery">—</dd></div>
         </dl>
         <p id="safety-status" class="safety-status">Checking auto-stop…</p>
         <p id="error-message" role="alert" hidden></p>
       </section>
-      <footer>Same Wi-Fi. Virtual motors. No physical robot required.</footer>
+      <footer id="controller-footer">Checking controller…</footer>
     </main>
   </body>
 </html>

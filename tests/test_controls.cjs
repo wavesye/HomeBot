@@ -40,11 +40,15 @@ async function setup(statusOverrides = {}, options = {}) {
   const listeners = {};
   const windowListeners = {};
   const requests = [];
+  const moveBodies = [];
   const waiting = [];
   const initialStatus = { connected: true, direction: "stop", speed: 0, battery: 100,
-    command_id: null, stop_reason: null, watchdog_timeout_ms: 2000, ...statusOverrides };
+    command_id: null, stop_reason: null, watchdog_timeout_ms: 2000, control_epoch: "epoch-0",
+    motor_mode: "mock", supported_directions: ["forward", "backward", "left", "right", "stop"],
+    max_speed: 1, fault: null, ...statusOverrides };
   let serverStatus = initialStatus;
   let commandCount = 0;
+  let epochCount = 0;
   const heartbeats = [];
   const waitingHeartbeats = [];
   const waitingStatus = [];
@@ -52,7 +56,7 @@ async function setup(statusOverrides = {}, options = {}) {
   const requestSignals = [];
   const timers = new Map();
   let nextTimer = 0;
-  let deferStatus = false;
+  let deferStatus = Boolean(options.deferInitialStatus);
   const document = {
     hidden: false,
     querySelector: get,
@@ -78,7 +82,8 @@ async function setup(statusOverrides = {}, options = {}) {
       }
       assert.equal(path, "/api/move");
       const command = JSON.parse(options.body);
-      requests.push(command);
+      moveBodies.push(command);
+      requests.push({ direction: command.direction, speed: command.speed });
       return new Promise((resolve, reject) => waiting.push({ resolve, reject, command, signal: options.signal }));
     },
   });
@@ -86,7 +91,7 @@ async function setup(statusOverrides = {}, options = {}) {
   await tick();
 
   return {
-    get, buttons, requests, heartbeats, beacons, requestSignals,
+    get, buttons, requests, moveBodies, heartbeats, beacons, requestSignals,
     deferStatus() { deferStatus = true; },
     setServerStatus(status) { serverStatus = { ...serverStatus, ...status }; },
     timerCount(delay) { return [...timers.values()].filter((timer) => timer.delay === delay).length; },
@@ -142,14 +147,21 @@ async function setup(statusOverrides = {}, options = {}) {
       }) });
       await tick();
     },
-    async reply(fail = false) {
+    async replyHttpError(status, detail) {
+      const request = waiting.shift();
+      assert.ok(request, "Expected an outstanding move request");
+      request.resolve({ ok: false, status, json: async () => ({ detail }) });
+      await tick();
+    },
+    async reply(fail = false, overrides = {}) {
       const request = waiting.shift();
       assert.ok(request, "Expected an outstanding move request");
       if (fail) request.reject(new Error("Test network failure"));
       else {
-        serverStatus = { ...initialStatus, ...request.command,
+        serverStatus = { ...serverStatus, ...request.command,
+          control_epoch: request.command.direction === "stop" ? `epoch-${++epochCount}` : serverStatus.control_epoch,
           command_id: request.command.direction === "stop" ? null : `command-${++commandCount}`,
-          stop_reason: request.command.direction === "stop" ? "manual" : null };
+          stop_reason: request.command.direction === "stop" ? "manual" : null, ...overrides };
         request.resolve({ ok: true, json: async () => serverStatus });
       }
       await tick();
@@ -686,5 +698,241 @@ test("the older-browser timeout fallback also aborts a stalled response body", a
   assert.equal(signal.aborted, true);
   assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
   assert.equal(page.timerCount(500), 0);
+  await page.reply();
+});
+
+const benchStatus = {
+  motor_mode: "tb6612", supported_directions: ["forward", "backward", "stop"],
+  max_speed: 0.4, battery: null, control_epoch: "bench-start",
+};
+
+test("mock mode remains explicit and preserves its full controls and default speed", async () => {
+  const page = await setup();
+  assert.equal(page.get("#motor-mode").textContent, "Mock");
+  assert.equal(page.get("#speed-slider").max, "100");
+  assert.equal(page.get("#speed-slider").value, "50");
+  assert.equal(page.get("#battery").textContent, "100%");
+  assert.equal(page.buttons.every((button) => !button.disabled), true);
+  page.click("left");
+  assert.equal(page.moveBodies[0].control_epoch, "epoch-0");
+  await page.reply();
+});
+
+test("the single motor bench starts at 20 percent PWM and polls preserve the user's selection", async () => {
+  const page = await setup(benchStatus);
+  assert.equal(page.get("#motor-mode").textContent, "Single motor bench");
+  assert.equal(page.get("#speed-slider").max, "40");
+  assert.equal(page.get("#speed-slider").value, "20");
+  assert.equal(page.get("#maximum-speed").textContent, "40%");
+  assert.equal(page.get("#selected-speed").textContent, "20%");
+  assert.equal(page.get("#speed-label").textContent, "PWM output");
+  assert.equal(page.get("#current-speed-label").textContent, "PWM command");
+  assert.equal(page.get("#battery").textContent, "Not measured");
+  assert.equal(page.get("#direction").textContent, "Output off");
+  assert.match(page.get("#motor-help").textContent, /STOP.*0\.5 s/);
+  assert.match(page.get("#controller-footer").textContent, /No rotation feedback/);
+  page.get("#speed-slider").value = "30";
+  await page.runTimer(1000);
+  assert.equal(page.get("#speed-slider").value, "30");
+  assert.equal(page.get("#selected-speed").textContent, "30%");
+  page.get("#speed-slider").value = "90"; // 即使输入值被外部改写，请求也不越过能力上限。
+  page.key("keydown", "KeyW");
+  assert.deepEqual(page.requests[0], { direction: "forward", speed: 0.4 });
+  assert.equal(page.moveBodies[0].control_epoch, "bench-start");
+  await page.reply();
+  page.key("keyup", "KeyW");
+  await page.reply();
+});
+
+test("unsupported bench directions are blocked for keyboard, touch, mouse and assistive clicks", async () => {
+  const page = await setup(benchStatus);
+  for (const direction of ["left", "right"]) {
+    assert.equal(page.buttons.find((button) => button.dataset.direction === direction).disabled, true);
+    page.pointer("pointerdown", direction);
+    page.pointer("pointerup", direction);
+    page.click(direction);
+    page.click(direction, { detail: 0, pointerType: undefined });
+  }
+  for (const key of ["KeyA", "KeyD", "ArrowLeft", "ArrowRight"]) {
+    page.key("keydown", key);
+    page.key("keyup", key);
+  }
+  assert.equal(page.requests.length, 0);
+  assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
+  page.key("keydown", "KeyW");
+  await page.reply();
+  page.key("keydown", "KeyA");
+  page.key("keyup", "KeyA");
+  assert.equal(page.requests.length, 1);
+  page.key("keyup", "KeyW");
+  assert.equal(page.requests.at(-1).direction, "stop");
+  await page.reply();
+});
+
+test("unknown capabilities never enable movement but an initial read failure still allows STOP", async () => {
+  const page = await setup({}, { deferInitialStatus: true });
+  assert.equal(page.buttons.every((button) => button.disabled), true);
+  page.key("keydown", "KeyW");
+  assert.equal(page.requests.length, 0);
+  await page.replyStatus(undefined, true);
+  assert.equal(page.buttons.find((button) => button.dataset.direction === "stop").disabled, false);
+  assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+  page.key("keydown", "KeyW");
+  page.pointer("pointerdown", "forward");
+  assert.equal(page.requests.length, 0);
+  page.click("stop");
+  assert.deepEqual(page.moveBodies[0], { direction: "stop", speed: 0 });
+  await page.reply();
+});
+
+test("a bench without a current control epoch permits STOP but no direction request", async () => {
+  const page = await setup({ ...benchStatus, control_epoch: null });
+  page.key("keydown", "KeyW");
+  page.pointer("pointerdown", "forward");
+  assert.equal(page.requests.length, 0);
+  page.click("stop");
+  await page.reply();
+  page.pointer("pointerdown", "forward");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "epoch-1");
+  await page.reply();
+});
+
+test("fault status displays unknown output and locks movement while keeping STOP retryable", async () => {
+  const fault = "GPIO write failed; output state is unknown.";
+  const page = await setup({ ...benchStatus, fault, connected: false, direction: "unknown", speed: null });
+  assert.equal(page.get("#direction").textContent, "Unknown");
+  assert.equal(page.get("#current-speed").textContent, "Unknown");
+  assert.equal(page.get("#battery").textContent, "Not measured");
+  assert.match(page.get("#error-message").textContent, /Motor fault.*cut motor power and restart service/);
+  assert.equal(page.get("#error-message").hidden, false);
+  assert.equal(page.get("#connection").textContent, "● Disconnected");
+  assert.equal(page.get("#speed-slider").disabled, true);
+  page.key("keydown", "KeyW");
+  page.pointer("pointerdown", "forward");
+  page.click("backward", { detail: 0 });
+  assert.equal(page.requests.length, 0);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(page.buttons.find((button) => button.dataset.direction === "stop").disabled, false);
+    page.click("stop");
+    await page.reply();
+    assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+    assert.match(page.get("#error-message").textContent, /Motor fault/);
+  }
+  assert.equal(page.timerCount(500), 0);
+});
+
+test("heartbeat fault releases a held touch and a server restart never resumes that old gesture", async () => {
+  const page = await setup(benchStatus);
+  page.pointer("pointerdown", "forward");
+  await page.reply();
+  await page.runTimer(500);
+  await page.replyHeartbeat({ ...benchStatus, connected: false, fault: "Motor I/O failed",
+    direction: "unknown", speed: null, command_id: null, control_epoch: "fault-epoch", watchdog_timeout_ms: 2000 });
+  assert.equal(page.timerCount(500), 0);
+  assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
+  page.pointer("pointerup", "forward");
+  page.click("forward", { pointerType: "touch" });
+  assert.equal(page.requests.length, 1);
+  page.setServerStatus({ connected: true, fault: null, direction: "stop", speed: 0,
+    command_id: null, control_epoch: "restart-epoch" });
+  await page.runTimer(1000);
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.timerCount(500), 0);
+  page.pointer("pointerdown", "forward", { pointerId: 2 });
+  assert.equal(page.moveBodies.at(-1).control_epoch, "restart-epoch");
+  await page.reply();
+});
+
+test("HTTP 503 locks bench movement immediately, drops queued moves and attempts STOP once", async () => {
+  const page = await setup(benchStatus);
+  page.key("keydown", "KeyW");
+  page.key("keydown", "KeyS");
+  await page.replyHttpError(503, "Motor driver failed");
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+  assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+  assert.match(page.get("#error-message").textContent, /Motor fault.*Motor driver failed/);
+  await page.reply(false, { fault: "Motor driver failed", connected: false });
+  page.key("keyup", "KeyS");
+  page.key("keydown", "KeyS");
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.timerCount(500), 0);
+  page.click("stop");
+  await page.reply(false, { fault: "Motor driver failed", connected: false });
+  assert.equal(page.requests.length, 3);
+});
+
+test("a reversal rejection preserves the server detail after safe STOP and never retries movement", async () => {
+  const page = await setup(benchStatus);
+  page.click("forward");
+  await page.reply();
+  page.key("keydown", "KeyS");
+  const detail = "Press STOP and wait at least 0.5 seconds before reversing.";
+  await page.replyHttpError(409, detail);
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "backward", "stop"]);
+  await page.reply();
+  assert.equal(page.get("#error-message").textContent, detail);
+  assert.equal(page.get("#error-message").hidden, false);
+  await page.runTimer(1000);
+  assert.equal(page.get("#error-message").textContent, detail);
+  page.key("keydown", "KeyS", { repeat: true });
+  page.key("keyup", "KeyS");
+  assert.equal(page.requests.length, 3);
+  assert.equal(page.timerCount(500), 0);
+  page.key("keydown", "KeyS");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "epoch-1");
+  await page.reply();
+  assert.equal(page.get("#error-message").hidden, true);
+});
+
+test("a stale STOP response still supplies the epoch for a fresh direction queued behind it", async () => {
+  const page = await setup(benchStatus);
+  page.key("keydown", "KeyW");
+  page.key("keyup", "KeyW");
+  page.key("keydown", "KeyW");
+  await page.reply();
+  assert.equal(page.moveBodies[1].direction, "stop");
+  assert.equal(page.moveBodies[1].control_epoch, "bench-start");
+  await page.reply(false, { control_epoch: "after-stop" });
+  assert.equal(page.moveBodies[2].direction, "forward");
+  assert.equal(page.moveBodies[2].control_epoch, "after-stop");
+  await page.reply();
+  assert.equal(page.timerCount(500), 1);
+});
+
+test("late poll and heartbeat replies cannot replace the epoch acknowledged by STOP", async () => {
+  for (const source of ["poll", "heartbeat"]) {
+    const page = await setup(benchStatus);
+    if (source === "poll") {
+      page.deferStatus();
+      await page.runTimer(1000);
+    }
+    page.click("forward");
+    await page.reply();
+    if (source === "heartbeat") await page.runTimer(500);
+    page.click("stop");
+    await page.reply(false, { control_epoch: "new-stop-epoch" });
+    const oldStatus = { ...benchStatus, connected: true, direction: "forward", speed: 0.2,
+      command_id: "command-1", fault: null, watchdog_timeout_ms: 2000 };
+    if (source === "poll") await page.replyStatus(oldStatus);
+    else await page.replyHeartbeat(oldStatus);
+    page.click("forward");
+    assert.equal(page.moveBodies.at(-1).control_epoch, "new-stop-epoch");
+    await page.reply();
+  }
+});
+
+test("a fault in a superseded STOP reply cancels the direction waiting behind it", async () => {
+  const page = await setup(benchStatus);
+  page.key("keydown", "KeyW");
+  await page.reply();
+  page.key("keyup", "KeyW");
+  page.key("keydown", "KeyS");
+  await page.reply(false, { fault: "Stop output not confirmed", connected: false,
+    direction: "unknown", speed: null, control_epoch: "fault-stop" });
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "stop"]);
+  assert.equal(page.timerCount(500), 0);
+  assert.match(page.get("#error-message").textContent, /cut motor power and restart service/);
+  page.click("stop");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "fault-stop");
   await page.reply();
 });

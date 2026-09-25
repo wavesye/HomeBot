@@ -68,11 +68,12 @@ button {
   cursor: pointer;
 }
 button span { font-size: 23px; line-height: 1; }
+button .direction-name { font-size: inherit; line-height: normal; }
 button:hover { background: #e5eddf; }
 button.keyboard-active, button.touch-active { background: #d7e9dc; border-color: #348666; box-shadow: 0 0 0 2px #34866633; }
 button:active { transform: translateY(1px); }
 button:focus-visible, input:focus-visible { outline: 3px solid #7cb598; outline-offset: 3px; }
-button:disabled { opacity: 0.5; cursor: wait; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
 .forward { grid-area: forward; }
 .backward { grid-area: backward; }
 .left { grid-area: left; }
@@ -84,6 +85,7 @@ output { color: #2e7456; font-weight: 600; font-size: 14px; }
 input[type="range"] { width: 100%; min-height: 44px; margin: 6px 0 0; accent-color: #348666; cursor: pointer; }
 .range-labels { display: flex; justify-content: space-between; font-size: 10px; color: #718078; }
 .hint { margin: 8px 0 20px; font-size: 11px; color: #718078; }
+.motor-help { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: #596e61; }
 .touch-help, .keyboard-help, .safety-help { margin: 0 0 12px; font-size: 11px; line-height: 1.7; color: #596e61; text-align: center; }
 .safety-help { margin-bottom: 20px; }
 .safety-status { margin: 14px 0 0; font-size: 12px; line-height: 1.5; color: #596e61; }
@@ -94,7 +96,7 @@ kbd { padding: 2px 5px; border: 1px solid #dbe3d8; border-radius: 4px; backgroun
 .connection.disconnected, #error-message { color: #9d493b; }
 dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0 0; }
 dt { color: #718078; font-size: 11px; }
-dd { margin: 5px 0 0; font-size: 16px; font-weight: 600; }
+dd { margin: 5px 0 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 #error-message { font-size: 12px; line-height: 1.5; }
 footer { text-align: center; color: #839086; font-size: 10px; margin-top: 24px; }
 @media (max-width: 600px) {

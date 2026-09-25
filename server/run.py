@@ -41,14 +41,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="启动 Homebot；默认仅本机访问，--lan 允许同 Wi-Fi 的手机访问。")
     parser.add_argument("--lan", action="store_true", help="允许局域网访问，并在未设置访问码时自动生成。")
     parser.add_argument("--port", type=port_number, default=8000, help="HTTP 端口（默认 8000）。")
+    parser.add_argument("--motor", choices=("mock", "tb6612"), default="mock", help="mock 为虚拟电机；tb6612 为树莓派单电机台架。")
     args = parser.parse_args(argv)
 
+    # 每次启动均需显式选择真实电机，不沿用父 shell 遗留的真实模式。
+    os.environ["HOMEBOT_MOTOR"] = args.motor
     access_code = os.environ.get("HOMEBOT_ACCESS_CODE", "")
     if args.lan and not access_code:
         access_code = secrets.token_urlsafe(12)
         os.environ["HOMEBOT_ACCESS_CODE"] = access_code
 
-    print(f"Homebot v0.5 · 虚拟电机\n本机：http://localhost:{args.port}", flush=True)
+    motor_label = "虚拟电机" if args.motor == "mock" else "TB6612 单电机台架 · 输出上限 40%"
+    print(f"Homebot v0.6 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
+    if args.motor == "tb6612":
+        print("仅连接 A 通道单电机，电机独立 4.5–6V 供电并共地；反转前先 STOP，等轴停稳。", flush=True)
     if args.lan:
         addresses = lan_addresses()
         for address in addresses:

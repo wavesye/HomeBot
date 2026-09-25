@@ -51,8 +51,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             patcher = patch.object(main, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        main.status.update(direction="stop", speed=0, command_id=None, stop_reason=None)
-        main.command_deadline = None
+        main.reset_status(main.MockMotorController())
 
     def assert_security_headers(self, headers):
         self.assertEqual(headers["cache-control"], "no-store")

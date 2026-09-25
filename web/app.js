@@ -16,6 +16,12 @@ let heartbeatCommandId = null;
 let heartbeatTimer;
 let statusTimer;
 let pageLeaving = false;
+let motorMode = null;
+let supportedDirections = [];
+let maxSpeed = 0;
+let motorFault = null;
+let controlEpoch = null;
+let lastMoveError = null;
 
 const HEARTBEAT_INTERVAL_MS = 500;
 const STATUS_INTERVAL_MS = 1000;
@@ -43,30 +49,86 @@ const directionLabels = {
   left: "Left",
   right: "Right",
   stop: "Stop",
+  unknown: "Unknown",
 };
 
-function renderStatus(status) {
-  connection.textContent = status.connected ? "● Connected" : "● Disconnected";
-  connection.className = status.connected ? "connection connected" : "connection disconnected";
-  document.querySelector("#direction").textContent = directionLabels[status.direction];
-  document.querySelector("#current-speed").textContent = `${Math.round(status.speed * 100)}%`;
-  document.querySelector("#battery").textContent = `${status.battery}%`;
-  const timeoutSeconds = status.watchdog_timeout_ms / 1000;
-  document.querySelector("#safety-status").textContent = status.stop_reason === "timeout"
-    ? "Auto-stopped: heartbeat lost. Use a direction control to move again."
-    : `Auto-stop ready · ${timeoutSeconds}s timeout${status.command_id ? " · Movement active" : ""}`;
-  errorMessage.hidden = true;
+function updateControlEpoch(status) {
+  if (typeof status.control_epoch === "string") controlEpoch = status.control_epoch;
 }
 
-function showError() {
+function canUseDirection(direction) {
+  if (!controlsReady) return false;
+  if (direction === "stop") return true; // 未知状态或故障时仍可重试停止。
+  return !motorFault && motorMode !== null && supportedDirections.includes(direction)
+    && maxSpeed > 0 && (motorMode !== "tb6612" || controlEpoch !== null);
+}
+
+function motorFaultMessage() {
+  return `Motor fault — cut motor power and restart service. ${motorFault}`;
+}
+
+function updateControllerDetails(status) {
+  const firstBenchStatus = status.motor_mode === "tb6612" && motorMode !== "tb6612";
+  if (status.motor_mode === "mock" || status.motor_mode === "tb6612") motorMode = status.motor_mode;
+  if (Array.isArray(status.supported_directions)) supportedDirections = status.supported_directions;
+  if (Number.isFinite(status.max_speed)) maxSpeed = Math.max(0, Math.min(1, status.max_speed));
+  if ("fault" in status) motorFault = status.fault;
+  const bench = motorMode === "tb6612";
+  const maximumPercent = Math.floor(maxSpeed * 100);
+  speedSlider.max = String(maximumPercent);
+  speedSlider.value = String(firstBenchStatus ? Math.min(20, maximumPercent) : Math.min(Number(speedSlider.value), maximumPercent));
+  selectedSpeed.textContent = `${speedSlider.value}%`;
+  document.querySelector("#maximum-speed").textContent = `${maximumPercent}%`;
+  document.querySelector("#motor-mode").textContent = bench ? "Single motor bench" : motorMode === "mock" ? "Mock" : "Checking controller…";
+  document.querySelector("#motor-help").textContent = bench
+    ? "Channel A · forward / reverse only. Press STOP and wait at least 0.5 s before reversing."
+    : motorMode === "mock" ? "Mock mode only prints commands. No physical motor is driven." : "Waiting for controller capabilities.";
+  document.querySelector("#backward-name").textContent = bench ? "Reverse" : "Backward";
+  document.querySelector("#keyboard-keys").textContent = bench ? "W S" : "W A S D";
+  document.querySelector("#keyboard-arrows").textContent = bench ? "↑ ↓" : "↑ ← ↓ →";
+  document.querySelector("#speed-label").textContent = bench ? "PWM output" : "Speed";
+  document.querySelector("#speed-help").textContent = bench
+    ? "Applied on your next press. PWM is an output command, not a measured shaft speed."
+    : "Applied on your next direction press.";
+  document.querySelector("#direction-label").textContent = bench ? "Direction command" : "Direction";
+  document.querySelector("#current-speed-label").textContent = bench ? "PWM command" : "Speed";
+  document.querySelector("#controller-footer").textContent = bench
+    ? "Single motor bench. No rotation feedback; output off does not confirm the shaft has stopped."
+    : motorMode === "mock" ? "Same Wi-Fi. Mock motors. No physical robot required." : "Checking controller…";
+  updateMovementButtons();
+}
+
+function renderStatus(status) {
+  updateControllerDetails(status);
+  connection.textContent = status.connected ? "● Connected" : "● Disconnected";
+  connection.className = status.connected ? "connection connected" : "connection disconnected";
+  document.querySelector("#direction").textContent = motorMode === "tb6612" && status.direction === "stop"
+    ? "Output off" : motorMode === "tb6612" && status.direction === "backward" ? "Reverse" : directionLabels[status.direction] || "Unknown";
+  document.querySelector("#current-speed").textContent = Number.isFinite(status.speed) ? `${Math.round(status.speed * 100)}%` : "Unknown";
+  document.querySelector("#battery").textContent = status.battery === null ? "Not measured" : `${status.battery}%`;
+  const timeoutSeconds = status.watchdog_timeout_ms / 1000;
+  document.querySelector("#safety-status").textContent = motorFault
+    ? "Motor control is locked. STOP remains available to retry."
+    : status.stop_reason === "timeout"
+    ? motorMode === "tb6612" ? "Output disabled: heartbeat lost. Press a direction to request output again."
+      : "Auto-stopped: heartbeat lost. Use a direction control to move again."
+    : `Auto-stop ready · ${timeoutSeconds}s timeout${status.command_id ? " · Movement active" : ""}`;
+  errorMessage.textContent = motorFault ? motorFaultMessage() : lastMoveError || "";
+  errorMessage.hidden = !motorFault && !lastMoveError;
+}
+
+function showError(detail) {
   connection.textContent = "● Disconnected";
   connection.className = "connection disconnected";
   // 请求失败时无法确认当前状态，避免把旧数值当成最新状态。
   document.querySelector("#direction").textContent = "—";
   document.querySelector("#current-speed").textContent = "—";
-  document.querySelector("#battery").textContent = "—";
-  document.querySelector("#safety-status").textContent = "Status unknown. Server auto-stop remains active.";
-  errorMessage.textContent = "Request failed. Heartbeats stopped. Check the server, then use a direction control to retry.";
+  document.querySelector("#battery").textContent = motorMode === "tb6612" ? "Not measured" : "—";
+  document.querySelector("#safety-status").textContent = motorFault
+    ? "Motor control is locked. STOP remains available to retry."
+    : "Status unknown. Heartbeats stopped.";
+  errorMessage.textContent = motorFault ? motorFaultMessage()
+    : detail || lastMoveError || "Request failed. Heartbeats stopped. Check the server, then use a direction control to retry.";
   errorMessage.hidden = false;
 }
 
@@ -87,13 +149,15 @@ function clearPointerControl() {
 }
 
 function acceptStatus(status) {
+  updateControlEpoch(status);
   // 别的页面接管或后端已超时后，不接续新动作，也不自动恢复旧动作。
-  if (heartbeatCommandId && status.command_id !== heartbeatCommandId) {
+  if (status.fault || (heartbeatCommandId && status.command_id !== heartbeatCommandId)) {
     stopHeartbeat();
     wantsMovement = false;
     activeKey = null;
     clearPointerControl();
     movementVersion += 1;
+    if (status.fault) pendingMoves = pendingMoves.filter((command) => command.direction === "stop");
     updateMovementButtons();
   }
   renderStatus(status);
@@ -149,14 +213,17 @@ async function refreshStatus() {
 function updateMovementButtons() {
   buttons.forEach((button) => {
     // 按住的按钮保持可用，慢请求期间仍能收到指针释放；STOP 始终可用。
-    button.disabled = !controlsReady || (sendingMove && button.dataset.direction !== "stop" && button !== activePointer?.button);
+    button.disabled = !canUseDirection(button.dataset.direction)
+      || (sendingMove && button.dataset.direction !== "stop" && button !== activePointer?.button);
     button.classList.toggle("keyboard-active", button.dataset.direction === keyDirections[activeKey]);
     button.classList.toggle("touch-active", button === activePointer?.button);
   });
+  speedSlider.disabled = !controlsReady || motorMode === null || Boolean(motorFault);
 }
 
 function sendMove(direction) {
-  if (!controlsReady || pageLeaving) return;
+  if (!canUseDirection(direction) || pageLeaving) return;
+  if (direction !== "stop") lastMoveError = null;
   // 新操作先结束旧动作的续期；等待中的 STOP 也不会被丢弃。
   stopHeartbeat();
   wantsMovement = direction !== "stop";
@@ -169,7 +236,7 @@ function sendMove(direction) {
   }
   pendingMoves.push({
     direction,
-    speed: direction === "stop" ? 0 : Number(speedSlider.value) / 100,
+    speed: direction === "stop" ? 0 : Math.max(0, Math.min(maxSpeed, Number(speedSlider.value) / 100)),
     version: movementVersion,
   });
   if (!sendingMove) processMoves();
@@ -184,14 +251,26 @@ async function processMoves() {
       const response = await fetch("/api/move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ direction: command.direction, speed: command.speed }),
+        body: JSON.stringify({ direction: command.direction, speed: command.speed,
+          ...(controlEpoch !== null ? { control_epoch: controlEpoch } : {}) }),
         keepalive: command.direction === "stop",
         signal: timeoutSignal(5000),
       });
-      if (!response.ok) throw new Error("Move request failed");
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        const error = new Error(typeof body.detail === "string" ? body.detail : `Move request failed (HTTP ${response.status}).`);
+        error.status = response.status;
+        throw error;
+      }
       const status = await response.json();
+      // STOP 回复即使已被新按键取代，也要先更新编号，供队列下一条指令使用。
+      updateControlEpoch(status);
+      if (status.fault) {
+        acceptStatus(status);
+        continue;
+      }
       if (command.version !== movementVersion || pageLeaving) continue;
-      renderStatus(status);
+      acceptStatus(status);
       // 只续期本页刚确认的动作，轮询读到的其他动作不会获得心跳。
       if (wantsMovement && status.command_id && !document.hidden) {
         heartbeatCommandId = status.command_id;
@@ -204,8 +283,10 @@ async function processMoves() {
       wantsMovement = false;
       stopHeartbeat();
       movementVersion += 1;
+      if (motorMode === "tb6612" && error.status === 503) motorFault = error.message;
+      if (!lastMoveError || command.direction !== "stop") lastMoveError = error.message;
       updateMovementButtons();
-      showError();
+      showError(lastMoveError);
       // 移动失败时尝试一次停止；停止也失败就留给用户重试，避免无限请求。
       pendingMoves = command.direction === "stop" ? [] : [{ direction: "stop", speed: 0, version: movementVersion }];
     }
@@ -232,7 +313,7 @@ buttons.forEach((button) => {
       sendMove("stop");
       return;
     }
-    if (spaceHeld || activePointer || event.isPrimary === false || event.button !== 0 || button.disabled) return;
+    if (!canUseDirection(button.dataset.direction) || spaceHeld || activePointer || event.isPrimary === false || event.button !== 0 || button.disabled) return;
     try {
       button.setPointerCapture(event.pointerId);
     } catch (error) {
@@ -296,7 +377,7 @@ document.addEventListener("keydown", (event) => {
   const direction = keyDirections[event.code];
   if (!direction) return;
   event.preventDefault();
-  if (event.repeat || spaceHeld) return;
+  if (event.repeat || spaceHeld || !canUseDirection(direction)) return;
   clearPointerControl();
   activeKey = event.code; // 后按下的方向接管，不组合方向。
   updateMovementButtons();

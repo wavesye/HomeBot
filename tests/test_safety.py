@@ -51,6 +51,12 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(environment.stop)
         self.now = 100.0
         self.motor = Mock()
+        self.motor.mode = "mock"
+        self.motor.max_speed = 1.0
+        self.motor.supported_directions = ("forward", "backward", "left", "right", "stop")
+        builder = patch.object(main, "build_motor", return_value=self.motor)
+        builder.start()
+        self.addCleanup(builder.stop)
         self.camera = Mock()
         for target, replacement in (("motor", self.motor), ("camera", self.camera)):
             patcher = patch.object(main, target, replacement)
@@ -59,16 +65,7 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
         clock = patch.object(main, "monotonic", side_effect=lambda: self.now)
         clock.start()
         self.addCleanup(clock.stop)
-        main.status.update(
-            connected=True,
-            direction="stop",
-            speed=0,
-            battery=100,
-            command_id=None,
-            stop_reason=None,
-            watchdog_timeout_ms=2000,
-        )
-        main.command_deadline = None
+        main.reset_status(self.motor)
 
     async def move(self, direction="forward", speed=0.5):
         code, data = await request("POST", "/api/move", {"direction": direction, "speed": speed})
@@ -90,11 +87,15 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_status_and_version(self):
         code, data = await request("GET", "/api/status")
         self.assertEqual(code, 200)
-        self.assertEqual(main.app.version, "0.5.0")
+        self.assertEqual(main.app.version, "0.6.0")
         self.assertEqual(data, {
             "connected": True, "direction": "stop", "speed": 0, "battery": 100,
             "command_id": None, "stop_reason": None, "watchdog_timeout_ms": 2000,
+            "motor_mode": "mock", "max_speed": 1.0, "fault": None,
+            "supported_directions": ["forward", "backward", "left", "right", "stop"],
+            "control_epoch": data["control_epoch"],
         })
+        self.assertEqual(UUID(data["control_epoch"]).version, 4)
         self.motor.stop.assert_not_called()
 
     async def test_directions_issue_distinct_tokens_and_keep_motor_mapping(self):
@@ -221,10 +222,14 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_camera_is_released_even_if_shutdown_motor_stop_fails(self):
         self.motor.stop.side_effect = RuntimeError("motor error")
-        with self.assertRaisesRegex(RuntimeError, "motor error"):
+        with self.assertLogs(main.logger, level="ERROR"):
             async with main.lifespan(main.app):
                 await self.move()
-        self.assert_stopped(main.status, "shutdown")
+        self.assertEqual(main.status["direction"], "unknown")
+        self.assertIsNone(main.status["speed"])
+        self.assertFalse(main.status["connected"])
+        self.assertIn("stop failed", main.status["fault"])
+        self.motor.close.assert_called_once_with()
         self.camera.stop.assert_called_once_with()
 
     async def test_heartbeat_validation_does_not_extend_active_motion(self):
