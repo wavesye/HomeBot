@@ -12,7 +12,7 @@ from server import run
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
-        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": "", "HOMEBOT_MOTOR": "mock"})
+        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": "", "HOMEBOT_MOTOR": "mock", "HOMEBOT_CAMERA": "opencv"})
         environment.start()
         self.addCleanup(environment.stop)
         server = patch.object(run.uvicorn, "run")
@@ -29,6 +29,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_defaults_are_local_single_process_and_ignore_proxy_headers(self):
         output = self.launch([])
+        self.assertEqual(os.environ["HOMEBOT_CAMERA"], "opencv")
         self.server.assert_called_once_with("server.main:app", host="127.0.0.1", port=8000, workers=1, reload=False, proxy_headers=False)
         self.assertIn("http://localhost:8000", output)
         self.assertIn("python -m server.run --lan", output)
@@ -109,6 +110,29 @@ class LauncherTests(unittest.TestCase):
     def test_port_boundaries_are_valid(self):
         self.assertEqual(run.port_number("1"), 1)
         self.assertEqual(run.port_number("65535"), 65535)
+
+    def test_camera_flag_is_passed_before_server_import(self):
+        observed = []
+        self.server.side_effect = lambda *args, **kwargs: observed.append(os.environ["HOMEBOT_CAMERA"])
+        output = self.launch(["--camera", "picamera2", "--lan"])
+        self.assertEqual(observed, ["picamera2"])
+        self.assertIn("摄像头后端：picamera2", output)
+        self.assertEqual(os.environ["HOMEBOT_MOTOR"], "mock")
+
+    def test_camera_environment_and_flag_override(self):
+        os.environ["HOMEBOT_CAMERA"] = "picamera2"
+        self.launch([])
+        self.assertEqual(os.environ["HOMEBOT_CAMERA"], "picamera2")
+        self.launch(["--camera", "opencv"])
+        self.assertEqual(os.environ["HOMEBOT_CAMERA"], "opencv")
+
+    def test_invalid_camera_flag_or_environment_prevents_launch(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.launch(["--camera", "typo"])
+        os.environ["HOMEBOT_CAMERA"] = "typo"
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.launch([])
+        self.server.assert_not_called()
 
 
 class AddressTests(unittest.TestCase):

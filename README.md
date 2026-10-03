@@ -68,7 +68,7 @@ python -m server.run
 
 先读完接线与电源步骤，再在 Pi 上执行 `python -m server.run --lan --motor tb6612`。普通 `python -m server.run --lan` 或显式 `--motor mock` 仍是虚拟模式。真实模式只允许单电机两个方向；STOP 后至少等 0.5 秒并观察轴完全停下，才可反向。停止通过 STBY 拉低让电机滑行，不是机械急停。
 
-用户现有 Pi OS Lite 继续使用，通过 SSH 安装与启动。Pi 用充电宝（核对稳定 5V / 3A），电机用独立的 4 节 1.5V AA 并共地；电池组标称 6V，首次先实测是否在到手电机允许范围内，并确认是正确的 4 节串联电池盒，不能把 5 节盒随意少装一节。OV5647 的 CSI 预览本版不适配，台架测试不启用摄像头。具体接线与供电按台架文档核对。
+用户现有 Pi OS Lite 继续使用，通过 SSH 安装与启动。Pi 用充电宝（核对稳定 5V / 3A），电机用独立的 4 节 1.5V AA 并共地；电池组标称 6V，首次先实测是否在到手电机允许范围内，并确认是正确的 4 节串联电池盒，不能把 5 节盒随意少装一节。OV5647 已新增可选 Picamera2 后端，启动与独立验收见 [树莓派 CSI 预览](docs/pi-camera.md)；单电机台架测试仍不启用摄像头。具体接线与供电按台架文档核对。
 
 ## Phone control over Wi-Fi (v0.5)
 
@@ -141,14 +141,14 @@ v0.5 的原验收标准是：真实手机可在同一 Wi-Fi 下通过访问码�
 
 页面每秒读取 `/api/status`，使 Auto-stop、Direction 和 Speed 跟上后端的超时停止。读取状态不会续期。移动、心跳或状态请求失败时，页面取消自动续期并尝试 STOP；恢复网络后不会自动恢复移动，需要重新点击方向或松开并重新按键。关闭页面的 STOP 请求只能尽力送达，未送达时由后端超时处理。
 
-## Camera preview (v0.2.1)
+## Camera preview (OpenCV / Picamera2)
 
-下面是原有电脑摄像头流程。v0.6 台架不迁移 OV5647 CSI 相机；安装 OpenCV 不代表 `VideoCapture(0)` 能读取它。Pi 台架请保持摄像头关闭，迁移说明见 [台架文档](docs/v0.6-bench.md#7-ov5647-为什么这次不接)。
+默认后端为 `opencv`，读取电脑/USB 摄像头（编号 `0`）。树莓派 OV5647 CSI 使用 `python -m server.run --lan --camera picamera2`；完整依赖、启动、故障排查和网页验收见 [树莓派 CSI 预览](docs/pi-camera.md)。也可通过 `HOMEBOT_CAMERA=picamera2` 选择，命令行 `--camera` 优先。Picamera2 仅在点击开启或执行检查时导入，未安装它的电脑仍可使用默认后端。两个后端共用下列网页流程和 JPEG API。
 
 1. 启动 Homebot 并打开页面，摄像头初始为关闭状态。
-2. 点击 **Start camera**。程序读取运行 FastAPI 的电脑上的默认摄像头（编号 `0`），不是访问网页的手机或另一台电脑的摄像头。
+2. 点击 **Start camera**。程序读取运行 FastAPI 的电脑或树莓派上所选后端的摄像头，不是访问网页的手机或另一台电脑的摄像头。
 3. macOS 首次使用时，先按下面的“首次授权检查”在终端完成权限与读图检查。在系统询问时，为启动 Python 的终端或应用授权。
-4. 看到画面后仍可点击移动按钮，电机继续只在终端打印。
+4. 默认虚拟模式下，看到画面后仍可点击移动按钮，电机只在终端打印。
 5. 点击 **Stop camera** 释放摄像头。切换到其他标签页或隐藏页面也会尝试关闭；重新显示页面后需手动开启。
 
 关闭页面时会发送一次尽力而为的停止请求，断网或浏览器崩溃时不能保证送达。可以重新打开页面点击 Stop camera，或在服务终端按 `Ctrl+C` 释放摄像头。页面没有录制功能，程序不保存图片文件。
@@ -165,7 +165,7 @@ v0.5 的原验收标准是：真实手机可在同一 Wi-Fi 下通过访问码�
 python -m server.camera --check
 ```
 
-命令在 Python 主线程中尝试打开默认摄像头、读取一张 JPEG，然后释放设备，不保存或打印画面。成功时输出 `Camera OK: received ... JPEG bytes. No image saved.` 和 `Camera released.`，退出码为 0；失败时给出检查建议，退出码为 1。
+命令在 Python 主线程中尝试打开默认摄像头、读取一张 JPEG，然后释放设备，不保存或打印画面。成功时输出 `Camera OK (opencv): received ... JPEG bytes. No image saved.` 和 `Camera released.`，退出码为 0；失败时给出检查建议，退出码为 1。
 
 macOS 首次请求权限可能先弹出授权框、随后本次命令返回失败；允许后再运行一次检查。若已拒绝授权，请到“系统设置 → 隐私与安全性 → 摄像头”检查启动 Python 的应用，再重试。尽量从同一个终端应用运行检查和 Uvicorn，因为权限与启动应用有关。看到 Camera OK 后，再在网页点击 Start camera。
 
@@ -293,10 +293,10 @@ POST /api/move → 后端开始移动，返回 command_id
 
 ```text
 Start camera → POST /api/camera/start → CameraController.start()
-浏览器 → GET /api/camera/frame → camera.read() → JPEG → <img>
+浏览器 → GET /api/camera/frame → read() / capture_array("main") → JPEG → <img>
          ↑                 200ms 后请求下一张              ↓
          └───────────────────────────────────────────────┘
-Stop camera → POST /api/camera/stop → capture.release()
+Stop camera → POST /api/camera/stop → release() / stop() + close()
 ```
 
 `camera.py` 中的 `get_frame()` 获取一张画面，`cv2.imencode()` 将它转换为浏览器认识的 JPEG。`main.py` 的 `Response(..., media_type="image/jpeg")` 返回图片，而不是 JSON。`app.js` 用 `response.blob()` 读取图片，通过 `URL.createObjectURL()` 给 `<img>` 设置临时地址；旧地址及时释放，避免一直占用内存。
@@ -403,7 +403,7 @@ v0.2 摄像头接口：
 | --- | --- |
 | `POST /api/camera/start` | `{"active": true}`；失败返回 503 和原因 |
 | `GET /api/camera/frame` | 一张 JPEG；未开启或读图失败返回 503 |
-| `POST /api/camera/stop` | `{"active": false}`；重复关闭也可成功 |
+| `POST /api/camera/stop` | `{"active": false}`；重复关闭也可成功；设备关闭失败返回 503 和原因，可重试 |
 
 新增验收：开启后能看到刷新画面；关闭后图片消失且摄像头释放；再次开启可恢复；没有摄像头或权限不足时显示错误，移动控制仍可使用。
 
@@ -413,7 +413,7 @@ v0.2 摄像头接口：
 python -m unittest discover -s tests -v
 ```
 
-摄像头测试使用设备替身，验证真实 JPEG 编解码、重复开关、未开启读图、设备打开失败、读取失败及编码失败。v0.4 新增的 `test_safety.py` 验证虚拟电机心跳和超时停止。真实设备和系统权限需要在自己的电脑上通过 Start camera 验证。
+摄像头测试使用 OpenCV / Picamera2 设备替身，验证真实 JPEG 编解码与颜色顺序、延迟导入、后端选择、重复开关、未开启读图、配置/读取/编码失败清理、关闭失败重试、并发读图与停止，以及真实 ASGI 路由的 JPEG/503 契约和服务退出清理。v0.4 新增的 `test_safety.py` 验证虚拟电机心跳和超时停止。真实设备和系统权限需要在自己的电脑上通过 Start camera 验证。
 
 2026-09-11 验证记录：6 项自动测试通过；浏览器中的 50% 前进、左转和 STOP 回归通过，并核对了终端输出；临时测试服务提供的带帧编号图片能持续刷新，关闭后消失、再次开启后恢复。测试服务仅用于验证，不是项目功能。尚未开启本机真实摄像头，真实画面及系统权限未验证。
 

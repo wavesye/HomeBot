@@ -42,7 +42,11 @@ def main(argv=None):
     parser.add_argument("--lan", action="store_true", help="允许局域网访问，并在未设置访问码时自动生成。")
     parser.add_argument("--port", type=port_number, default=8000, help="HTTP 端口（默认 8000）。")
     parser.add_argument("--motor", choices=("mock", "tb6612"), default="mock", help="mock 为虚拟电机；tb6612 为树莓派单电机台架。")
+    parser.add_argument("--camera", choices=("opencv", "picamera2"), default=os.environ.get("HOMEBOT_CAMERA", "opencv"), help="摄像头后端（默认 HOMEBOT_CAMERA 或 opencv；Pi CSI 使用 picamera2）。")
     args = parser.parse_args(argv)
+    if args.camera not in ("opencv", "picamera2"):
+        parser.error("HOMEBOT_CAMERA must be opencv or picamera2.")
+    os.environ["HOMEBOT_CAMERA"] = args.camera
 
     # 每次启动均需显式选择真实电机，不沿用父 shell 遗留的真实模式。
     os.environ["HOMEBOT_MOTOR"] = args.motor
@@ -53,6 +57,7 @@ def main(argv=None):
 
     motor_label = "虚拟电机" if args.motor == "mock" else "TB6612 单电机台架 · 输出上限 40%"
     print(f"Homebot v0.6 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
+    print(f"摄像头后端：{args.camera}（点击 Start camera 后才开启）", flush=True)
     if args.motor == "tb6612":
         print("仅连接 A 通道单电机，电机独立 4.5–6V 供电并共地；反转前先 STOP，等轴停稳。", flush=True)
     if args.lan:

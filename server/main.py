@@ -227,7 +227,10 @@ def camera_frame():
 
 @app.post("/api/camera/stop")
 def stop_camera():
-    camera.stop()
+    try:
+        camera.stop()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     return {"active": False}
 
 
