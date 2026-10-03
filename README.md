@@ -6,13 +6,13 @@ Homebot 是一个从零学习家庭机器人软件的项目。未来希望它能
 
 ## Current Version
 
-Homebot v0.6 adds an opt-in Raspberry Pi / TB6612FNG driver for a single-motor bench test.
+Homebot v0.6 supports an opt-in Raspberry Pi / DRV8833 driver for the current single-motor bench, with the TB6612FNG driver retained for that separate hardware.
 
 Virtual motor mode remains the default; a complete robot is not required.
 
-本版目标：在 Raspberry Pi 4B 上，通过 TB6612FNG 的 A 通道让一台真实电机转动和停止。默认仍使用虚拟电机，真实驱动必须显式选择；沿用局域网访问码、手机触屏、键盘、STOP 和 2 秒心跳超时停止。真实模式只做单电机台架，PWM 上限 40%，先从滑块初值 20% 短测，不做左右转向。
+本版目标：在 Raspberry Pi 4B 上，通过用户现有 DRV8833 模块的 A 通道让一台真实电机转动和停止。默认仍使用虚拟电机，真实驱动必须显式选择；沿用局域网访问码、手机触屏、键盘、STOP 和 2 秒心跳超时停止。真实模式只做单电机台架，PWM 上限 40%，先从滑块初值 20% 短测，不做左右转向。原 TB6612FNG 驱动保留用于另一种对应硬件，不能用它控制这块 DRV8833。
 
-Connected 是软件控制状态；页面的方向与百分比是输出命令，不是实际转速或轴已停止的反馈，电量也尚未测量。真实 GPIO 故障会锁定控制，不能把未确认的硬件状态当作已停止。没有硬件时仍可运行全部虚拟电机功能。
+Connected 是软件控制状态；页面的方向与百分比是输出命令，不是实际转速或轴已停止的反馈，电量也尚未测量。真实 GPIO 操作异常会锁定控制，不能把未确认的硬件状态当作已停止；DRV8833 的 nFAULT 未接入，软件锁定不代表检测到芯片过流、过热或堵转。没有硬件时仍可运行全部虚拟电机功能。
 
 **按用户本次指令进入 v0.6；真实 Pi 与单电机台架待用户验收，v0.7 未开始。** 每版实测并确认后再进入下一版；未补写任何 v0.5 手机实测通过结论。各版目标与标准见 [ROADMAP.md](ROADMAP.md)，本版先读 [v0.6 单电机台架步骤](docs/v0.6-bench.md)。
 
@@ -62,11 +62,19 @@ python -m server.run
 
 ## Single-motor bench (v0.6)
 
-- **具体内容**：接入 Pi 4B、TB6612FNG A 通道和一台减速电机；正转、停止、反转；默认虚拟模式，显式选择真实模式；限制输出、故障锁定及正常退出清理。
+- **具体内容**：接入 Pi 4B、当前 DRV8833 模块的 A 通道和一台减速电机；正转、停止、反转；默认虚拟模式，显式选择真实模式；限制输出、故障锁定及正常退出清理。另保留 TB6612FNG 对应驱动。
 - **完成标准**：同一网页控制台架电机转动与停止，启动不自转，STOP/松手/超时/正常退出撤销输出，恢复连接不自动转动。
 - **需要用户测试**：按 [断电接线与逐步验收](docs/v0.6-bench.md) 核对供电、接线、启动、20% 短测、停稳后反向及停止。源码与替身测试不代表真实 Pi 已验证。
 
-先读完接线与电源步骤，再在 Pi 上执行 `python -m server.run --lan --motor tb6612`。普通 `python -m server.run --lan` 或显式 `--motor mock` 仍是虚拟模式。真实模式只允许单电机两个方向；STOP 后至少等 0.5 秒并观察轴完全停下，才可反向。停止通过 STBY 拉低让电机滑行，不是机械急停。
+先读完接线与电源步骤，确认模块 STBY 接到芯片 nSLEEP 且没有会影响 Pi GPIO 的固定拉高或 VM 上拉，再在 Pi 上执行：
+
+```bash
+python -m server.run --lan --motor drv8833
+```
+
+普通 `python -m server.run --lan` 或显式 `--motor mock` 仍是虚拟模式。DRV8833 的 PWM 直接输出到 AIN1 或 AIN2，另一输入保持低；Pi 的 3.3V、5V、BCM18（物理 12）均不接该模块，NC 全部留空。`--motor tb6612` 只用于已核实的 TB6612FNG，专用接线与命令见 [台架文档附录](docs/v0.6-bench.md#附录仅供另一块已核实的-tb6612fng-模块)；选错可能使调速失效。
+
+真实模式只允许单电机两个方向；STOP 后至少等 0.5 秒并观察轴完全停下，才可反向。DRV8833 停止时将 STBY/nSLEEP 拉低、两路 PWM 归零，电机滑行停下；唤醒时两路输入保持低，等待至少 1ms 后才施加 PWM。它不提供机械急停或轴停转反馈。
 
 用户现有 Pi OS Lite 继续使用，通过 SSH 安装与启动。Pi 用充电宝（核对稳定 5V / 3A），电机用独立的 4 节 1.5V AA 并共地；电池组标称 6V，首次先实测是否在到手电机允许范围内，并确认是正确的 4 节串联电池盒，不能把 5 节盒随意少装一节。OV5647 已新增可选 Picamera2 后端，启动与独立验收见 [树莓派 CSI 预览](docs/pi-camera.md)；单电机台架测试仍不启用摄像头。具体接线与供电按台架文档核对。
 
@@ -191,7 +199,8 @@ homebot_v1/
 │   ├── access.py     # 网页与 API 的访问验证、请求来源检查
 │   ├── camera.py     # 打开摄像头、读取 JPEG、释放设备、命令行检查
 │   ├── motor.py      # 电机能力约定和打印动作的实现
-│   └── tb6612.py     # 显式启用的 TB6612 A 通道 GPIO 驱动
+│   ├── drv8833.py    # 当前 DRV8833 A 通道驱动：输入 PWM 与休眠控制
+│   └── tb6612.py     # 保留给 TB6612FNG 硬件的 A 通道 GPIO 驱动
 ├── web/
 │   ├── index.html   # 按钮、滑块、状态与自动停止提示
 │   ├── style.css    # 页面样式
@@ -201,7 +210,8 @@ homebot_v1/
     ├── test_bench.py     # 单电机模式 API 限制、停止代号与故障处理
     ├── test_camera.py    # 使用替身测试，不打开真实摄像头
     ├── test_run.py       # 局域网启动参数与地址提示
-    ├── test_motor.py     # GPIO 替身验证真实驱动的输出和清理
+    ├── test_motor.py     # GPIO 替身验证 TB6612 驱动的输出和清理
+    ├── test_drv8833.py   # GPIO 替身验证 DRV8833 的 PWM、唤醒和清理
     ├── test_safety.py    # 测试后端心跳、超时与停止行为
     └── test_controls.cjs # 使用请求与事件替身测试键盘、触屏、心跳和失败处理
 ```
@@ -218,8 +228,9 @@ JavaScript
 FastAPI
    ↓
 MotorController
-   ├── mock   → MockMotorController → Terminal output
-   └── tb6612 → TB6612MotorController → GPIO → TB6612 A → 单电机
+   ├── mock    → MockMotorController → Terminal output
+   ├── drv8833 → DRV8833MotorController → GPIO → DRV8833 A → 单电机
+   └── tb6612  → TB6612MotorController → GPIO → TB6612 A → 单电机
 ```
 
 - **Browser**：显示用户操作界面；v0.5 局域网访问先通过原生验证框输入用户名和访问码。
@@ -227,9 +238,10 @@ MotorController
 - **FastAPI**：校验方向和速度，调用 Python 方法；后台检查移动是否超时。
 - **MotorController**：定义机器人应有的移动能力，是一个简单的类约定。
 - **MockMotorController**：默认实现，用 `print()` 模拟电机。
-- **TB6612MotorController**：在 Pi 上显式启用；只支持单电机正反转与停止，输出上限 40%。
+- **DRV8833MotorController**：当前模块在 Pi 上显式启用的驱动；用 AIN1/AIN2 输入 PWM、nSLEEP 休眠控制，只支持单电机正反转与停止，输出上限 40%。
+- **TB6612MotorController**：为 TB6612FNG 硬件保留的独立驱动，使用专用 PWMA；同样只支持单电机正反转与停止，输出上限 40%。
 
-为什么不在 API 里直接操作 GPIO？API 处理动作、限制与超时，具体接线由驱动类负责。默认 `motor` 是 `MockMotorController`，`motor.forward(0.5)` 只打印；选择 `tb6612` 后使用同一方法约定驱动 GPIO。v0.6 通过驱动报告支持的方向和输出上限，网页据此关闭左右转并限制滑块。
+为什么不在 API 里直接操作 GPIO？API 处理动作、限制与超时，具体接线由驱动类负责。默认 `motor` 是 `MockMotorController`，`motor.forward(0.5)` 只打印；按实际硬件选择 `drv8833` 或 `tb6612` 后使用同一方法约定驱动 GPIO。v0.6 通过驱动报告支持的方向和输出上限，网页据此关闭左右转并限制滑块。
 
 基类中的 `raise NotImplementedError` 表示“这个能力需要由子类实现”。它本身不驱动任何东西；`motor: MotorController` 是类型提示，运行时执行启动时选择的具体实现。下面的 50% 数据流例子只用于虚拟模式。
 
@@ -340,7 +352,7 @@ v0.6 新增模式与控制字段：
 
 | 字段 | 虚拟模式 / 真实单电机模式 |
 | --- | --- |
-| `motor_mode` | `"mock"` / `"tb6612"` |
+| `motor_mode` | `"mock"` / `"drv8833"` / `"tb6612"`；必须与实际接线的驱动模块一致 |
 | `supported_directions` | 四方向与 `stop` / 仅 `forward`、`backward`、`stop` |
 | `max_speed` | `1.0` / `0.4`，表示允许的最大 PWM 输出比例 |
 | `battery` | 虚拟占位 `100` / `null`，真实电量未测量 |
@@ -531,7 +543,7 @@ node --check web/app.js
 
 ### v0.6 验收范围
 
-`test_motor.py` 用 GPIO 替身检查单电机驱动，`test_bench.py` 检查模式限制、停止代号、反向等待与故障处理；不会给真实 GPIO 或电机通电。实际 Pi 安装、电源测量、断电接线和单电机运行仍需用户完成 [台架验收表](docs/v0.6-bench.md#6-用户逐步验收)。软件开发检查与实机结果分别记录，未执行的项目不写为通过。
+`test_motor.py` 与 `test_drv8833.py` 用 GPIO 替身检查对应单电机驱动，`test_bench.py` 检查模式限制、停止代号、反向等待与故障处理；不会给真实 GPIO 或电机通电。实际 Pi 安装、电源测量、断电接线和单电机运行仍需用户完成 [台架验收表](docs/v0.6-bench.md#6-用户逐步验收)。软件开发检查与实机结果分别记录，未执行的项目不写为通过。
 
 ### v0.6 开发验证记录（2026-09-25）
 
@@ -541,6 +553,14 @@ node --check web/app.js
 - 默认虚拟模式浏览器回归通过：显示 Mock，滑块默认 50%、上限 100%，左转 50% 与 STOP 归零正常；摄像头保持关闭。单电机模拟页和虚拟页未读到控制台错误或警告，临时服务均已正常退出。
 
 这些是软件与模拟控制验证；尚未验证 Pi 上依赖安装、真实 GPIO、用户电源电压、轴转动与停止，不能据此认定 v0.6 实机完成。实际台架验收等待用户按文档执行并确认。
+
+### v0.6 DRV8833 软件验证记录（2026-10-03）
+
+- 140 项 Python 测试、59 项 JavaScript 测试通过；`node --check web/app.js` 通过，启动器帮助正确列出 `mock`、`drv8833` 和 `tb6612`。
+- 新增 15 项 DRV8833 GPIO 替身测试，覆盖正反向输入 PWM、40% 上限、唤醒等待、停止/退出，以及初始化和输出阶段异常后的清理；后端和前端测试覆盖新模式的选择与单电机限制。
+- 默认仍为 `mock`；当前模块显式选择 `drv8833` 后，页面显示 **DRV8833 · Single motor bench**。TB6612 驱动保留，硬件与命令分别说明。
+
+本次记录来自自动软件测试，没有给真实 GPIO 或电机通电，也没有新增人工浏览器验收；模块 STBY/nSLEEP 核对、Pi 安装和真实转动/停止仍待用户执行。保持 v0.6，未开始 v0.7。
 
 ## Learning path
 
@@ -608,7 +628,7 @@ node --check web/app.js
 
 1. 先读 [单电机台架文档](docs/v0.6-bench.md)，区分 BCM 编号、物理针脚、逻辑电源和电机电源。
 2. `server/run.py`：看 `--motor` 的默认值如何保留虚拟模式，再看 `server/main.py` 如何在启动时选择驱动。
-3. `server/tb6612.py`：沿正转、停止、反转阅读 GPIO 输出，理解 STBY 拉低为何表示撤销驱动而不是测得轴停止。
+3. `server/drv8833.py`：沿正转、停止、反转阅读 AIN1/AIN2 的 PWM 和 nSLEEP 控制，理解休眠、唤醒等待，以及撤销驱动为何不代表测得轴停止；需要比较不同硬件时再读 `server/tb6612.py` 的独立 PWMA。
 4. `server/main.py`：看模式上限、`control_epoch`、反向等待和故障锁定；区分拒绝指令与驱动故障。
 5. `web/app.js`：看页面如何根据支持方向和上限显示单电机控制，再对照故障时的未知状态。
 

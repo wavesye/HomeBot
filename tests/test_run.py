@@ -89,18 +89,33 @@ class LauncherTests(unittest.TestCase):
         self.server.assert_not_called()
 
     def test_real_mode_requires_an_explicit_flag_even_with_old_environment(self):
-        os.environ["HOMEBOT_MOTOR"] = "tb6612"
-        output = self.launch([])
-        self.assertEqual(os.environ["HOMEBOT_MOTOR"], "mock")
-        self.assertIn("虚拟电机", output)
+        for mode in ("tb6612", "drv8833"):
+            with self.subTest(mode=mode):
+                os.environ["HOMEBOT_MOTOR"] = mode
+                output = self.launch([])
+                self.assertEqual(os.environ["HOMEBOT_MOTOR"], "mock")
+                self.assertIn("虚拟电机", output)
 
-    def test_explicit_tb6612_mode_selects_single_motor_without_reload(self):
-        output = self.launch(["--motor", "tb6612", "--lan"])
-        self.assertEqual(os.environ["HOMEBOT_MOTOR"], "tb6612")
-        self.assertIn("单电机", output)
-        self.assertIn("40%", output)
-        self.assertFalse(self.server.call_args.kwargs["reload"])
-        self.assertEqual(self.server.call_args.kwargs["workers"], 1)
+    def test_explicit_real_modes_select_single_motor_without_reload(self):
+        for mode in ("tb6612", "drv8833"):
+            with self.subTest(mode=mode):
+                output = self.launch(["--motor", mode, "--lan"])
+                self.assertEqual(os.environ["HOMEBOT_MOTOR"], mode)
+                self.assertIn(f"{mode.upper()} 单电机", output)
+                self.assertIn("40%", output)
+                self.assertFalse(self.server.call_args.kwargs["reload"])
+                self.assertEqual(self.server.call_args.kwargs["workers"], 1)
+
+    def test_help_does_not_construct_controllers_or_start_server(self):
+        with patch("server.tb6612.TB6612MotorController") as tb6612, patch("server.drv8833.DRV8833MotorController") as drv8833:
+            for mode in ("tb6612", "drv8833"):
+                with self.subTest(mode=mode), redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as error:
+                    run.main(["--motor", mode, "--help"])
+                self.assertEqual(error.exception.code, 0)
+                self.assertIn("drv8833", output.getvalue())
+            tb6612.assert_not_called()
+            drv8833.assert_not_called()
+        self.server.assert_not_called()
 
     def test_unknown_motor_is_rejected_without_opening_server(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

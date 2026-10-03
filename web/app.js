@@ -56,11 +56,15 @@ function updateControlEpoch(status) {
   if (typeof status.control_epoch === "string") controlEpoch = status.control_epoch;
 }
 
+function isBenchMode(mode) {
+  return mode === "tb6612" || mode === "drv8833";
+}
+
 function canUseDirection(direction) {
   if (!controlsReady) return false;
   if (direction === "stop") return true; // 未知状态或故障时仍可重试停止。
   return !motorFault && motorMode !== null && supportedDirections.includes(direction)
-    && maxSpeed > 0 && (motorMode !== "tb6612" || controlEpoch !== null);
+    && maxSpeed > 0 && (!isBenchMode(motorMode) || controlEpoch !== null);
 }
 
 function motorFaultMessage() {
@@ -68,18 +72,18 @@ function motorFaultMessage() {
 }
 
 function updateControllerDetails(status) {
-  const firstBenchStatus = status.motor_mode === "tb6612" && motorMode !== "tb6612";
-  if (status.motor_mode === "mock" || status.motor_mode === "tb6612") motorMode = status.motor_mode;
+  const firstBenchStatus = isBenchMode(status.motor_mode) && motorMode !== status.motor_mode;
+  if (status.motor_mode === "mock" || isBenchMode(status.motor_mode)) motorMode = status.motor_mode;
   if (Array.isArray(status.supported_directions)) supportedDirections = status.supported_directions;
   if (Number.isFinite(status.max_speed)) maxSpeed = Math.max(0, Math.min(1, status.max_speed));
   if ("fault" in status) motorFault = status.fault;
-  const bench = motorMode === "tb6612";
+  const bench = isBenchMode(motorMode);
   const maximumPercent = Math.floor(maxSpeed * 100);
   speedSlider.max = String(maximumPercent);
   speedSlider.value = String(firstBenchStatus ? Math.min(20, maximumPercent) : Math.min(Number(speedSlider.value), maximumPercent));
   selectedSpeed.textContent = `${speedSlider.value}%`;
   document.querySelector("#maximum-speed").textContent = `${maximumPercent}%`;
-  document.querySelector("#motor-mode").textContent = bench ? "Single motor bench" : motorMode === "mock" ? "Mock" : "Checking controller…";
+  document.querySelector("#motor-mode").textContent = bench ? `${motorMode.toUpperCase()} · Single motor bench` : motorMode === "mock" ? "Mock" : "Checking controller…";
   document.querySelector("#motor-help").textContent = bench
     ? "Channel A · forward / reverse only. Press STOP and wait at least 0.5 s before reversing."
     : motorMode === "mock" ? "Mock mode only prints commands. No physical motor is driven." : "Waiting for controller capabilities.";
@@ -102,15 +106,15 @@ function renderStatus(status) {
   updateControllerDetails(status);
   connection.textContent = status.connected ? "● Connected" : "● Disconnected";
   connection.className = status.connected ? "connection connected" : "connection disconnected";
-  document.querySelector("#direction").textContent = motorMode === "tb6612" && status.direction === "stop"
-    ? "Output off" : motorMode === "tb6612" && status.direction === "backward" ? "Reverse" : directionLabels[status.direction] || "Unknown";
+  document.querySelector("#direction").textContent = isBenchMode(motorMode) && status.direction === "stop"
+    ? "Output off" : isBenchMode(motorMode) && status.direction === "backward" ? "Reverse" : directionLabels[status.direction] || "Unknown";
   document.querySelector("#current-speed").textContent = Number.isFinite(status.speed) ? `${Math.round(status.speed * 100)}%` : "Unknown";
   document.querySelector("#battery").textContent = status.battery === null ? "Not measured" : `${status.battery}%`;
   const timeoutSeconds = status.watchdog_timeout_ms / 1000;
   document.querySelector("#safety-status").textContent = motorFault
     ? "Motor control is locked. STOP remains available to retry."
     : status.stop_reason === "timeout"
-    ? motorMode === "tb6612" ? "Output disabled: heartbeat lost. Press a direction to request output again."
+    ? isBenchMode(motorMode) ? "Output disabled: heartbeat lost. Press a direction to request output again."
       : "Auto-stopped: heartbeat lost. Use a direction control to move again."
     : `Auto-stop ready · ${timeoutSeconds}s timeout${status.command_id ? " · Movement active" : ""}`;
   errorMessage.textContent = motorFault ? motorFaultMessage() : lastMoveError || "";
@@ -123,7 +127,7 @@ function showError(detail) {
   // 请求失败时无法确认当前状态，避免把旧数值当成最新状态。
   document.querySelector("#direction").textContent = "—";
   document.querySelector("#current-speed").textContent = "—";
-  document.querySelector("#battery").textContent = motorMode === "tb6612" ? "Not measured" : "—";
+  document.querySelector("#battery").textContent = isBenchMode(motorMode) ? "Not measured" : "—";
   document.querySelector("#safety-status").textContent = motorFault
     ? "Motor control is locked. STOP remains available to retry."
     : "Status unknown. Heartbeats stopped.";
@@ -283,7 +287,7 @@ async function processMoves() {
       wantsMovement = false;
       stopHeartbeat();
       movementVersion += 1;
-      if (motorMode === "tb6612" && error.status === 503) motorFault = error.message;
+      if (isBenchMode(motorMode) && error.status === 503) motorFault = error.message;
       if (!lastMoveError || command.direction !== "stop") lastMoveError = error.message;
       updateMovementButtons();
       showError(lastMoveError);

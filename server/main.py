@@ -24,6 +24,7 @@ WATCHDOG_TIMEOUT_MS = 2000
 WATCHDOG_CHECK_INTERVAL_SECONDS = 0.1
 STOP_RETRY_SECONDS = 0.5
 REVERSE_PAUSE_SECONDS = 0.5
+REAL_MOTOR_MODES = ("tb6612", "drv8833")
 
 # direction/speed 是已接受的输出命令，不是编码器测得的转向或转速。
 status = {
@@ -47,7 +48,10 @@ def build_motor():
     if mode == "tb6612":
         from server.tb6612 import TB6612MotorController
         return TB6612MotorController()
-    raise ValueError("HOMEBOT_MOTOR must be mock or tb6612; no controller was started.")
+    if mode == "drv8833":
+        from server.drv8833 import DRV8833MotorController
+        return DRV8833MotorController()
+    raise ValueError("HOMEBOT_MOTOR must be mock, tb6612 or drv8833; no controller was started.")
 
 
 def reset_status(controller):
@@ -56,7 +60,7 @@ def reset_status(controller):
     last_motion_direction = last_stopped_at = None
     status.update(
         connected=True, direction="stop", speed=0,
-        battery=None if controller.mode == "tb6612" else 100,
+        battery=None if controller.mode in REAL_MOTOR_MODES else 100,
         command_id=None, stop_reason=None, motor_mode=controller.mode,
         supported_directions=list(controller.supported_directions),
         max_speed=controller.max_speed, fault=None, control_epoch=str(uuid4()),
@@ -162,7 +166,7 @@ async def move(command: MoveRequest):
 
     if status["fault"]:
         raise HTTPException(status_code=503, detail=status["fault"])
-    real_motor = status["motor_mode"] == "tb6612"
+    real_motor = status["motor_mode"] in REAL_MOTOR_MODES
     # 真实台架必须使用当前代号；虚拟模式仍兼容没有代号的旧调用方式。
     if (real_motor or command.control_epoch is not None) and command.control_epoch != status["control_epoch"]:
         raise HTTPException(status_code=409, detail="Movement expired after STOP. Refresh status and press again.")
@@ -178,7 +182,7 @@ async def move(command: MoveRequest):
         if status["direction"] != "stop" or last_stopped_at is None or monotonic() - last_stopped_at < REVERSE_PAUSE_SECONDS:
             raise HTTPException(status_code=409, detail="Press STOP, wait at least 0.5 seconds and let the shaft stop before reversing.")
 
-    # 本地 GPIO 写入不包含网络等待或 sleep；在可能产生输出之前设置期限。
+    # GPIO 操作同步执行（DRV8833 唤醒需等待 1 ms）；先设置期限，再允许输出。
     command_deadline = monotonic() + WATCHDOG_TIMEOUT_MS / 1000
     try:
         action = {

@@ -11,9 +11,11 @@ request = safety.request
 
 
 class BenchTests(unittest.IsolatedAsyncioTestCase):
+    motor_mode = "tb6612"
+
     def setUp(self):
         safety.SafetyTests.setUp(self)
-        self.motor.mode = "tb6612"
+        self.motor.mode = self.motor_mode
         self.motor.max_speed = 0.4
         self.motor.supported_directions = ("forward", "backward", "stop")
         main.reset_status(self.motor)
@@ -27,7 +29,7 @@ class BenchTests(unittest.IsolatedAsyncioTestCase):
     async def test_bench_metadata_has_no_fake_battery_or_feedback(self):
         code, data = await request("GET", "/api/status")
         self.assertEqual(code, 200)
-        self.assertEqual(data["motor_mode"], "tb6612")
+        self.assertEqual(data["motor_mode"], self.motor_mode)
         self.assertIsNone(data["battery"])
         self.assertEqual(data["max_speed"], 0.4)
         self.assertEqual(data["supported_directions"], ["forward", "backward", "stop"])
@@ -162,13 +164,34 @@ class BenchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(task.get_name() == "homebot-watchdog" for task in asyncio.all_tasks()))
 
 
+class DRV8833BenchTests(BenchTests):
+    motor_mode = "drv8833"
+
+
 class ControllerSelectionTests(unittest.TestCase):
     def test_default_is_mock_and_unknown_mode_is_an_error(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(main.build_motor().mode, "mock")
         with patch.dict(os.environ, {"HOMEBOT_MOTOR": "mock"}):
             self.assertEqual(main.build_motor().mode, "mock")
         with patch.dict(os.environ, {"HOMEBOT_MOTOR": "invalid"}):
             with self.assertRaises(ValueError):
                 main.build_motor()
+
+    def test_explicit_real_modes_construct_only_the_matching_controller(self):
+        with patch("server.tb6612.TB6612MotorController") as tb6612, patch("server.drv8833.DRV8833MotorController") as drv8833:
+            for mode, controller, other in (("tb6612", tb6612, drv8833), ("drv8833", drv8833, tb6612)):
+                with self.subTest(mode=mode), patch.dict(os.environ, {"HOMEBOT_MOTOR": mode}):
+                    self.assertIs(main.build_motor(), controller.return_value)
+                controller.assert_called_once_with()
+                other.assert_not_called()
+                controller.reset_mock()
+
+    def test_real_controller_failure_does_not_fall_back_to_mock(self):
+        for mode, name in (("tb6612", "TB6612MotorController"), ("drv8833", "DRV8833MotorController")):
+            with self.subTest(mode=mode), patch.dict(os.environ, {"HOMEBOT_MOTOR": mode}), patch(f"server.{mode}.{name}", side_effect=RuntimeError("no local GPIO")):
+                with self.assertRaisesRegex(RuntimeError, "no local GPIO"):
+                    main.build_motor()
 
 
 if __name__ == "__main__":
