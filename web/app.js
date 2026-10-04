@@ -53,18 +53,24 @@ const directionLabels = {
 };
 
 function updateControlEpoch(status) {
-  if (typeof status.control_epoch === "string") controlEpoch = status.control_epoch;
+  if ("control_epoch" in status) {
+    controlEpoch = typeof status.control_epoch === "string" && status.control_epoch.length > 0 ? status.control_epoch : null;
+  }
 }
 
 function isBenchMode(mode) {
   return mode === "tb6612" || mode === "drv8833";
 }
 
+function isRealMotorMode(mode) {
+  return isBenchMode(mode) || mode === "drv8833-dual";
+}
+
 function canUseDirection(direction) {
   if (!controlsReady) return false;
   if (direction === "stop") return true; // 未知状态或故障时仍可重试停止。
   return !motorFault && motorMode !== null && supportedDirections.includes(direction)
-    && maxSpeed > 0 && (!isBenchMode(motorMode) || controlEpoch !== null);
+    && maxSpeed > 0 && (!isRealMotorMode(motorMode) || controlEpoch !== null);
 }
 
 function motorFaultMessage() {
@@ -72,31 +78,43 @@ function motorFaultMessage() {
 }
 
 function updateControllerDetails(status) {
-  const firstBenchStatus = isBenchMode(status.motor_mode) && motorMode !== status.motor_mode;
-  if (status.motor_mode === "mock" || isBenchMode(status.motor_mode)) motorMode = status.motor_mode;
+  const firstRealStatus = isRealMotorMode(status.motor_mode) && motorMode !== status.motor_mode;
+  if (status.motor_mode === "mock" || isRealMotorMode(status.motor_mode)) motorMode = status.motor_mode;
   if (Array.isArray(status.supported_directions)) supportedDirections = status.supported_directions;
   if (Number.isFinite(status.max_speed)) maxSpeed = Math.max(0, Math.min(1, status.max_speed));
   if ("fault" in status) motorFault = status.fault;
   const bench = isBenchMode(motorMode);
+  const dual = motorMode === "drv8833-dual";
+  const real = isRealMotorMode(motorMode);
   const maximumPercent = Math.floor(maxSpeed * 100);
   speedSlider.max = String(maximumPercent);
-  speedSlider.value = String(firstBenchStatus ? Math.min(20, maximumPercent) : Math.min(Number(speedSlider.value), maximumPercent));
+  speedSlider.value = String(firstRealStatus ? Math.min(20, maximumPercent) : Math.min(Number(speedSlider.value), maximumPercent));
   selectedSpeed.textContent = `${speedSlider.value}%`;
   document.querySelector("#maximum-speed").textContent = `${maximumPercent}%`;
-  document.querySelector("#motor-mode").textContent = bench ? `${motorMode.toUpperCase()} · Single motor bench` : motorMode === "mock" ? "Mock" : "Checking controller…";
-  document.querySelector("#motor-help").textContent = bench
+  document.querySelector("#motor-mode").textContent = dual ? "DRV8833 · Two-wheel drive"
+    : bench ? `${motorMode.toUpperCase()} · Single motor bench` : motorMode === "mock" ? "Mock" : "Checking controller…";
+  document.querySelector("#motor-help").textContent = dual
+    ? "A Left / B Right · Before changing direction, press STOP, wait at least 0.5 s and let both wheels stop completely."
+    : bench
     ? "Channel A · forward / reverse only. Press STOP and wait at least 0.5 s before reversing."
     : motorMode === "mock" ? "Mock mode only prints commands. No physical motor is driven." : "Waiting for controller capabilities.";
+  const calibration = document.querySelector("#drive-calibration");
+  calibration.hidden = !dual;
+  const polarity = (inverted) => inverted === true ? "inverted" : inverted === false ? "normal" : "not reported";
+  calibration.textContent = dual ? `Polarity · A Left: ${polarity(status.left_inverted)} · B Right: ${polarity(status.right_inverted)}` : "";
+  document.querySelector("#physical-stop-help").hidden = !dual;
   document.querySelector("#backward-name").textContent = bench ? "Reverse" : "Backward";
   document.querySelector("#keyboard-keys").textContent = bench ? "W S" : "W A S D";
   document.querySelector("#keyboard-arrows").textContent = bench ? "↑ ↓" : "↑ ← ↓ →";
-  document.querySelector("#speed-label").textContent = bench ? "PWM output" : "Speed";
-  document.querySelector("#speed-help").textContent = bench
+  document.querySelector("#speed-label").textContent = real ? "PWM output" : "Speed";
+  document.querySelector("#speed-help").textContent = real
     ? "Applied on your next press. PWM is an output command, not a measured shaft speed."
     : "Applied on your next direction press.";
-  document.querySelector("#direction-label").textContent = bench ? "Direction command" : "Direction";
-  document.querySelector("#current-speed-label").textContent = bench ? "PWM command" : "Speed";
-  document.querySelector("#controller-footer").textContent = bench
+  document.querySelector("#direction-label").textContent = real ? "Direction command" : "Direction";
+  document.querySelector("#current-speed-label").textContent = real ? "PWM command" : "Speed";
+  document.querySelector("#controller-footer").textContent = dual
+    ? "Two-wheel drive. No wheel-speed feedback; output off does not confirm the wheels have stopped."
+    : bench
     ? "Single motor bench. No rotation feedback; output off does not confirm the shaft has stopped."
     : motorMode === "mock" ? "Same Wi-Fi. Mock motors. No physical robot required." : "Checking controller…";
   updateMovementButtons();
@@ -106,15 +124,15 @@ function renderStatus(status) {
   updateControllerDetails(status);
   connection.textContent = status.connected ? "● Connected" : "● Disconnected";
   connection.className = status.connected ? "connection connected" : "connection disconnected";
-  document.querySelector("#direction").textContent = isBenchMode(motorMode) && status.direction === "stop"
+  document.querySelector("#direction").textContent = isRealMotorMode(motorMode) && status.direction === "stop"
     ? "Output off" : isBenchMode(motorMode) && status.direction === "backward" ? "Reverse" : directionLabels[status.direction] || "Unknown";
   document.querySelector("#current-speed").textContent = Number.isFinite(status.speed) ? `${Math.round(status.speed * 100)}%` : "Unknown";
-  document.querySelector("#battery").textContent = status.battery === null ? "Not measured" : `${status.battery}%`;
+  document.querySelector("#battery").textContent = isRealMotorMode(motorMode) || status.battery === null ? "Not measured" : `${status.battery}%`;
   const timeoutSeconds = status.watchdog_timeout_ms / 1000;
   document.querySelector("#safety-status").textContent = motorFault
     ? "Motor control is locked. STOP remains available to retry."
     : status.stop_reason === "timeout"
-    ? isBenchMode(motorMode) ? "Output disabled: heartbeat lost. Press a direction to request output again."
+    ? isRealMotorMode(motorMode) ? "Output disabled: heartbeat lost. Press a direction to request output again."
       : "Auto-stopped: heartbeat lost. Use a direction control to move again."
     : `Auto-stop ready · ${timeoutSeconds}s timeout${status.command_id ? " · Movement active" : ""}`;
   errorMessage.textContent = motorFault ? motorFaultMessage() : lastMoveError || "";
@@ -127,7 +145,7 @@ function showError(detail) {
   // 请求失败时无法确认当前状态，避免把旧数值当成最新状态。
   document.querySelector("#direction").textContent = "—";
   document.querySelector("#current-speed").textContent = "—";
-  document.querySelector("#battery").textContent = isBenchMode(motorMode) ? "Not measured" : "—";
+  document.querySelector("#battery").textContent = isRealMotorMode(motorMode) ? "Not measured" : "—";
   document.querySelector("#safety-status").textContent = motorFault
     ? "Motor control is locked. STOP remains available to retry."
     : "Status unknown. Heartbeats stopped.";
@@ -287,7 +305,7 @@ async function processMoves() {
       wantsMovement = false;
       stopHeartbeat();
       movementVersion += 1;
-      if (isBenchMode(motorMode) && error.status === 503) motorFault = error.message;
+      if (isRealMotorMode(motorMode) && error.status === 503) motorFault = error.message;
       if (!lastMoveError || command.direction !== "stop") lastMoveError = error.message;
       updateMovementButtons();
       showError(lastMoveError);

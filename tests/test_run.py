@@ -12,7 +12,7 @@ from server import run
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
-        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": "", "HOMEBOT_MOTOR": "mock", "HOMEBOT_CAMERA": "opencv"})
+        environment = patch.dict(os.environ, {"HOMEBOT_ACCESS_CODE": "", "HOMEBOT_MOTOR": "mock", "HOMEBOT_CAMERA": "opencv", "HOMEBOT_INVERT_LEFT": "0", "HOMEBOT_INVERT_RIGHT": "0"})
         environment.start()
         self.addCleanup(environment.stop)
         server = patch.object(run.uvicorn, "run")
@@ -89,7 +89,7 @@ class LauncherTests(unittest.TestCase):
         self.server.assert_not_called()
 
     def test_real_mode_requires_an_explicit_flag_even_with_old_environment(self):
-        for mode in ("tb6612", "drv8833"):
+        for mode in ("tb6612", "drv8833", "drv8833-dual"):
             with self.subTest(mode=mode):
                 os.environ["HOMEBOT_MOTOR"] = mode
                 output = self.launch([])
@@ -121,6 +121,32 @@ class LauncherTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             run.main(["--motor", "unknown"])
         self.server.assert_not_called()
+
+    def test_dual_mode_passes_each_calibration_flag_before_server_start(self):
+        for flags, left, right in (([], "0", "0"), (["--invert-left"], "1", "0"), (["--invert-right"], "0", "1"), (["--invert-left", "--invert-right"], "1", "1")):
+            with self.subTest(flags=flags):
+                observed = []
+                self.server.side_effect = lambda *a, **k: observed.append((os.environ["HOMEBOT_MOTOR"], os.environ["HOMEBOT_INVERT_LEFT"], os.environ["HOMEBOT_INVERT_RIGHT"]))
+                output = self.launch(["--motor", "drv8833-dual", "--lan", *flags])
+                self.assertEqual(observed, [("drv8833-dual", left, right)])
+                self.assertIn("v0.7", output)
+                self.assertIn("30%", output)
+                self.assertIn("GPIO23", output)
+                self.assertEqual(self.server.call_args.kwargs["workers"], 1)
+                self.assertFalse(self.server.call_args.kwargs["reload"])
+
+    def test_calibration_flags_cannot_silently_apply_to_another_mode(self):
+        for mode in ("mock", "tb6612", "drv8833"):
+            for flag in ("--invert-left", "--invert-right"):
+                with self.subTest(mode=mode, flag=flag), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    run.main(["--motor", mode, flag])
+        self.server.assert_not_called()
+
+    def test_old_calibration_environment_is_not_reused_by_launcher(self):
+        os.environ.update(HOMEBOT_INVERT_LEFT="1", HOMEBOT_INVERT_RIGHT="1")
+        self.launch(["--motor", "drv8833-dual"])
+        self.assertEqual(os.environ["HOMEBOT_INVERT_LEFT"], "0")
+        self.assertEqual(os.environ["HOMEBOT_INVERT_RIGHT"], "0")
 
     def test_port_boundaries_are_valid(self):
         self.assertEqual(run.port_number("1"), 1)

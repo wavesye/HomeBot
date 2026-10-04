@@ -966,3 +966,202 @@ for (const motorMode of ["tb6612", "drv8833"]) {
     assert.equal(page.timerCount(500), 0);
   });
 }
+
+const dualStatus = {
+  motor_mode: "drv8833-dual", supported_directions: ["forward", "backward", "left", "right", "stop"],
+  max_speed: 0.3, battery: null, control_epoch: "dual-start", left_inverted: false, right_inverted: true,
+};
+
+test("dual drive reports channel mapping, polarity and a 30 percent PWM limit", async () => {
+  const page = await setup(dualStatus);
+  assert.equal(page.get("#motor-mode").textContent, "DRV8833 · Two-wheel drive");
+  assert.equal(page.get("#maximum-speed").textContent, "30%");
+  assert.equal(page.get("#speed-slider").max, "30");
+  assert.equal(page.get("#speed-slider").value, "20");
+  assert.equal(page.get("#selected-speed").textContent, "20%");
+  assert.equal(page.get("#speed-label").textContent, "PWM output");
+  assert.equal(page.get("#current-speed-label").textContent, "PWM command");
+  assert.equal(page.get("#direction").textContent, "Output off");
+  assert.equal(page.get("#battery").textContent, "Not measured");
+  assert.equal(page.get("#keyboard-keys").textContent, "W A S D");
+  assert.equal(page.get("#backward-name").textContent, "Backward");
+  assert.equal(page.buttons.every((button) => !button.disabled), true);
+  assert.match(page.get("#motor-help").textContent, /A Left \/ B Right.*changing direction.*0\.5 s.*both wheels stop/);
+  assert.equal(page.get("#drive-calibration").hidden, false);
+  assert.match(page.get("#drive-calibration").textContent, /A Left: normal.*B Right: inverted/);
+  assert.equal(page.get("#physical-stop-help").hidden, false);
+  assert.match(page.get("#controller-footer").textContent, /No wheel-speed feedback/);
+  page.get("#speed-slider").value = "25";
+  for (let i = 0; i < 2; i++) await page.runTimer(1000);
+  assert.equal(page.get("#speed-slider").value, "25");
+  assert.equal(page.get("#selected-speed").textContent, "25%");
+  page.get("#speed-slider").value = "90";
+  page.click("forward");
+  assert.deepEqual(page.moveBodies[0], { direction: "forward", speed: 0.3, control_epoch: "dual-start" });
+  await page.reply();
+});
+
+test("dual polarity reflects reported calibration without inventing missing values", async () => {
+  const page = await setup({ ...dualStatus, left_inverted: true, right_inverted: false });
+  assert.match(page.get("#drive-calibration").textContent, /A Left: inverted.*B Right: normal/);
+  page.setServerStatus({ left_inverted: undefined, right_inverted: undefined });
+  await page.runTimer(1000);
+  assert.match(page.get("#drive-calibration").textContent, /A Left: not reported.*B Right: not reported/);
+});
+
+test("entering dual mode resets selection once and single motor or mock modes hide dual details", async () => {
+  for (const motorMode of ["tb6612", "drv8833", "mock"]) {
+    const page = await setup({ motor_mode: motorMode });
+    assert.equal(page.get("#drive-calibration").hidden, true);
+    assert.equal(page.get("#physical-stop-help").hidden, true);
+    page.get("#speed-slider").value = "30";
+    page.setServerStatus(dualStatus);
+    await page.runTimer(1000);
+    assert.equal(page.get("#speed-slider").value, "20");
+    page.get("#speed-slider").value = "25";
+    await page.runTimer(1000);
+    assert.equal(page.get("#speed-slider").value, "25");
+  }
+});
+
+test("dual drive keeps all direction inputs and sends STOP when touch or keys are released", async () => {
+  for (const input of ["mouse", "touch", "keyboard"]) {
+    const page = await setup(dualStatus);
+    for (const [direction, key] of Object.entries({ forward: "KeyW", backward: "KeyS", left: "KeyA", right: "KeyD" })) {
+      if (input === "mouse") page.click(direction);
+      else if (input === "touch") page.pointer("pointerdown", direction);
+      else page.key("keydown", key);
+      assert.deepEqual(page.requests.at(-1), { direction, speed: 0.2 });
+      assert.ok(page.moveBodies.at(-1).control_epoch);
+      await page.reply();
+      if (input === "mouse") page.click("stop");
+      else if (input === "touch") page.pointer("pointerup", direction);
+      else page.key("keyup", key);
+      assert.deepEqual(page.requests.at(-1), { direction: "stop", speed: 0 });
+      assert.equal(page.timerCount(500), 0);
+      await page.reply();
+    }
+  }
+});
+
+test("dual movement requires a current nonempty epoch and STOP can restore it", async () => {
+  for (const control_epoch of [null, ""]) {
+    const page = await setup({ ...dualStatus, control_epoch });
+    page.key("keydown", "KeyW");
+    page.key("keydown", "KeyA");
+    page.pointer("pointerdown", "right");
+    page.click("backward");
+    assert.equal(page.requests.length, 0);
+    assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+    page.click("stop");
+    assert.deepEqual(page.moveBodies[0], { direction: "stop", speed: 0 });
+    await page.reply();
+    page.click("left");
+    assert.equal(page.moveBodies.at(-1).control_epoch, "epoch-1");
+    await page.reply();
+  }
+  const page = await setup();
+  page.setServerStatus({ ...dualStatus, control_epoch: null });
+  await page.runTimer(1000);
+  page.click("forward");
+  assert.equal(page.requests.length, 0, "An old mock epoch is not retained when the new controller reports none");
+});
+
+test("a dual direction change rejection keeps its detail after safe STOP and never retries", async () => {
+  const page = await setup(dualStatus);
+  page.click("forward");
+  await page.reply();
+  page.key("keydown", "KeyA");
+  const detail = "Press STOP, wait at least 0.5 seconds and let both wheels stop before changing direction.";
+  await page.replyHttpError(409, detail);
+  assert.deepEqual(page.requests.map((request) => request.direction), ["forward", "left", "stop"]);
+  await page.reply();
+  assert.equal(page.get("#error-message").textContent, detail);
+  await page.runTimer(1000);
+  page.key("keydown", "KeyA", { repeat: true });
+  page.key("keyup", "KeyA");
+  assert.equal(page.requests.length, 3);
+  assert.equal(page.timerCount(500), 0);
+  page.key("keydown", "KeyA");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "epoch-1");
+  await page.reply();
+});
+
+test("physical stop fault locks dual drive after release and ignores late heartbeat success", async () => {
+  const page = await setup(dualStatus);
+  page.pointer("pointerdown", "right");
+  await page.reply();
+  await page.runTimer(500);
+  const fault = "Physical stop loop opened. Resetting the button does not clear the fault; restart the service.";
+  page.setServerStatus({ fault, connected: false, direction: "stop", speed: 0,
+    command_id: null, control_epoch: "physical-stop" });
+  await page.runTimer(1000);
+  assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
+  assert.equal(page.timerCount(500), 0);
+  assert.match(page.get("#error-message").textContent, /Motor fault.*Physical stop loop opened/);
+  await page.replyHeartbeat({ ...dualStatus, connected: true, direction: "right", speed: 0.2,
+    command_id: "command-1", fault: null, watchdog_timeout_ms: 2000 });
+  page.pointer("pointerup", "right");
+  page.click("right", { pointerType: "touch" });
+  // 按钮复位后，服务仍报告锁定故障；页面不会清除它或重启旧动作。
+  await page.runTimer(1000);
+  page.key("keydown", "KeyW");
+  page.click("left");
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+  page.click("stop");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "physical-stop");
+  await page.reply();
+  assert.match(page.get("#error-message").textContent, /Physical stop loop opened/);
+  assert.equal(page.get("#speed-slider").disabled, true);
+  page.setServerStatus({ fault: null, connected: true, control_epoch: "restarted-controller" });
+  await page.runTimer(1000);
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.timerCount(500), 0);
+  page.pointer("pointerdown", "forward", { pointerId: 2 });
+  assert.equal(page.moveBodies.at(-1).control_epoch, "restarted-controller");
+  await page.reply();
+});
+
+test("dual HTTP 503 drops queued motion, locks all four directions and leaves STOP retryable", async () => {
+  const page = await setup(dualStatus);
+  page.key("keydown", "KeyA");
+  page.key("keydown", "KeyD");
+  await page.replyHttpError(503, "Physical stop loop opened or disconnected.");
+  assert.deepEqual(page.requests.map((request) => request.direction), ["left", "stop"]);
+  assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
+  assert.equal(page.buttons.find((button) => button.dataset.direction === "stop").disabled, false);
+  await page.reply(false, { fault: "Physical stop loop opened or disconnected.", connected: false });
+  page.key("keyup", "KeyD");
+  page.click("forward");
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.timerCount(500), 0);
+  assert.equal(page.get("#battery").textContent, "Not measured");
+  page.click("stop");
+  await page.reply();
+  assert.equal(page.requests.length, 3);
+});
+
+test("a dual STOP response updates the epoch even when another direction was queued meanwhile", async () => {
+  const page = await setup(dualStatus);
+  page.key("keydown", "KeyA");
+  page.key("keyup", "KeyA");
+  page.key("keydown", "KeyD");
+  await page.reply();
+  await page.reply(false, { control_epoch: "dual-after-stop" });
+  assert.deepEqual(page.moveBodies.at(-1), { direction: "right", speed: 0.2, control_epoch: "dual-after-stop" });
+  await page.reply();
+});
+
+test("dual unknown outputs and timeout status never claim measured wheel speed or battery", async () => {
+  const page = await setup({ ...dualStatus, connected: false, fault: "Output is unknown", direction: "unknown", speed: null });
+  assert.equal(page.get("#direction").textContent, "Unknown");
+  assert.equal(page.get("#current-speed").textContent, "Unknown");
+  assert.equal(page.get("#battery").textContent, "Not measured");
+  page.setServerStatus({ connected: true, fault: null, direction: "stop", speed: 0,
+    stop_reason: "timeout", control_epoch: "dual-timed-out" });
+  await page.runTimer(1000);
+  assert.equal(page.get("#direction").textContent, "Output off");
+  assert.match(page.get("#safety-status").textContent, /Output disabled: heartbeat lost/);
+  assert.equal(page.requests.length, 0);
+});

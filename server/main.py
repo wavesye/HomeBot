@@ -24,7 +24,7 @@ WATCHDOG_TIMEOUT_MS = 2000
 WATCHDOG_CHECK_INTERVAL_SECONDS = 0.1
 STOP_RETRY_SECONDS = 0.5
 REVERSE_PAUSE_SECONDS = 0.5
-REAL_MOTOR_MODES = ("tb6612", "drv8833")
+REAL_MOTOR_MODES = ("tb6612", "drv8833", "drv8833-dual")
 
 # direction/speed 是已接受的输出命令，不是编码器测得的转向或转速。
 status = {
@@ -34,6 +34,7 @@ status = {
     "motor_mode": "mock",
     "supported_directions": ["forward", "backward", "left", "right", "stop"],
     "max_speed": 1.0, "fault": None, "control_epoch": str(uuid4()),
+    "left_inverted": None, "right_inverted": None,
 }
 command_deadline: float | None = None
 stop_retry_deadline: float | None = None
@@ -51,7 +52,17 @@ def build_motor():
     if mode == "drv8833":
         from server.drv8833 import DRV8833MotorController
         return DRV8833MotorController()
-    raise ValueError("HOMEBOT_MOTOR must be mock, tb6612 or drv8833; no controller was started.")
+    if mode == "drv8833-dual":
+        from server.drive import DRV8833DriveController
+        # 校准只在启动时读取；非法配置不得带着猜测的轮向运行。
+        polarities = {}
+        for side in ("left", "right"):
+            value = os.environ.get(f"HOMEBOT_INVERT_{side.upper()}", "0")
+            if value not in ("0", "1"):
+                raise ValueError(f"HOMEBOT_INVERT_{side.upper()} must be 0 or 1.")
+            polarities[f"invert_{side}"] = value == "1"
+        return DRV8833DriveController(**polarities)
+    raise ValueError("HOMEBOT_MOTOR must be mock, tb6612, drv8833 or drv8833-dual; no controller was started.")
 
 
 def reset_status(controller):
@@ -64,6 +75,8 @@ def reset_status(controller):
         command_id=None, stop_reason=None, motor_mode=controller.mode,
         supported_directions=list(controller.supported_directions),
         max_speed=controller.max_speed, fault=None, control_epoch=str(uuid4()),
+        left_inverted=controller.invert_left if controller.mode == "drv8833-dual" else None,
+        right_inverted=controller.invert_right if controller.mode == "drv8833-dual" else None,
     )
 
 
@@ -94,6 +107,16 @@ def stop_motion(reason: Literal["manual", "timeout", "shutdown", "fault"]):
 
 
 def check_timeout():
+    # 检测按钮 NC 回路后撤销驱动输出并锁定控制；按钮不直接切断 VM。
+    # 回调只锁存事件；程序无法运行时须手动断电，复位排查也须保持电机断电。
+    # 即使没有网页请求、甚至当前已停止，也持续检查；故障锁定后只重试 STOP。
+    if status["motor_mode"] == "drv8833-dual" and not status["fault"]:
+        try:
+            motor.check_safety()
+        except Exception:
+            set_motor_fault("Physical stop circuit opened or could not be read. Cut motor power, check the stop switch and wiring, then restart Homebot.")
+            logger.exception("Physical stop circuit fault; locking motor control")
+            stop_motion("fault")
     now = monotonic()
     if command_deadline is not None and now >= command_deadline:
         stop_motion("timeout")
@@ -114,6 +137,7 @@ async def lifespan(app):
     # 真实设备仅在显式选择后、服务启动时初始化；失败就中止启动。
     motor = build_motor()
     reset_status(motor)
+    check_timeout()
     watchdog_task = asyncio.create_task(watch_motion(), name="homebot-watchdog")
     try:
         yield
@@ -135,7 +159,7 @@ async def lifespan(app):
                 camera.stop()
 
 
-app = FastAPI(title="Homebot", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="Homebot", version="0.7.0", lifespan=lifespan)
 app.add_middleware(AccessMiddleware)
 
 
@@ -173,14 +197,19 @@ async def move(command: MoveRequest):
     if command.direction not in status["supported_directions"]:
         raise HTTPException(status_code=422, detail="Single motor bench supports Forward, Backward and STOP only.")
     if command.speed > status["max_speed"]:
-        raise HTTPException(status_code=422, detail=f"Maximum bench output is {status['max_speed']:.0%}.")
+        raise HTTPException(status_code=422, detail=f"Maximum motor output is {status['max_speed']:.0%}.")
     if command.speed == 0:
         if not stop_motion("manual"):
             raise HTTPException(status_code=503, detail=status["fault"])
         return status.copy()
     if real_motor and last_motion_direction and command.direction != last_motion_direction:
         if status["direction"] != "stop" or last_stopped_at is None or monotonic() - last_stopped_at < REVERSE_PAUSE_SECONDS:
-            raise HTTPException(status_code=409, detail="Press STOP, wait at least 0.5 seconds and let the shaft stop before reversing.")
+            detail = (
+                "Press STOP, wait at least 0.5 seconds and let both wheels stop before changing direction."
+                if status["motor_mode"] == "drv8833-dual"
+                else "Press STOP, wait at least 0.5 seconds and let the shaft stop before reversing."
+            )
+            raise HTTPException(status_code=409, detail=detail)
 
     # GPIO 操作同步执行（DRV8833 唤醒需等待 1 ms）；先设置期限，再允许输出。
     command_deadline = monotonic() + WATCHDOG_TIMEOUT_MS / 1000

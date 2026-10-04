@@ -41,24 +41,37 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="启动 Homebot；默认仅本机访问，--lan 允许同 Wi-Fi 的手机访问。")
     parser.add_argument("--lan", action="store_true", help="允许局域网访问，并在未设置访问码时自动生成。")
     parser.add_argument("--port", type=port_number, default=8000, help="HTTP 端口（默认 8000）。")
-    parser.add_argument("--motor", choices=("mock", "tb6612", "drv8833"), default="mock", help="mock 为虚拟电机；tb6612 / drv8833 为对应驱动板的树莓派单电机台架。")
+    parser.add_argument("--motor", choices=("mock", "tb6612", "drv8833", "drv8833-dual"), default="mock", help="mock 为虚拟电机；tb6612 / drv8833 为单电机台架；drv8833-dual 为两轮底盘。")
+    parser.add_argument("--invert-left", action="store_true", help="反转 A 通道左轮的安装方向（仅 drv8833-dual）。")
+    parser.add_argument("--invert-right", action="store_true", help="反转 B 通道右轮的安装方向（仅 drv8833-dual）。")
     parser.add_argument("--camera", choices=("opencv", "picamera2"), default=os.environ.get("HOMEBOT_CAMERA", "opencv"), help="摄像头后端（默认 HOMEBOT_CAMERA 或 opencv；Pi CSI 使用 picamera2）。")
     args = parser.parse_args(argv)
+    if (args.invert_left or args.invert_right) and args.motor != "drv8833-dual":
+        parser.error("--invert-left / --invert-right 只适用于 --motor drv8833-dual。")
     if args.camera not in ("opencv", "picamera2"):
         parser.error("HOMEBOT_CAMERA must be opencv or picamera2.")
     os.environ["HOMEBOT_CAMERA"] = args.camera
 
     # 每次启动均需显式选择真实电机，不沿用父 shell 遗留的真实模式。
     os.environ["HOMEBOT_MOTOR"] = args.motor
+    os.environ["HOMEBOT_INVERT_LEFT"] = "1" if args.invert_left else "0"
+    os.environ["HOMEBOT_INVERT_RIGHT"] = "1" if args.invert_right else "0"
     access_code = os.environ.get("HOMEBOT_ACCESS_CODE", "")
     if args.lan and not access_code:
         access_code = secrets.token_urlsafe(12)
         os.environ["HOMEBOT_ACCESS_CODE"] = access_code
 
     motor_label = "虚拟电机" if args.motor == "mock" else f"{args.motor.upper()} 单电机台架 · 输出上限 40%"
-    print(f"Homebot v0.6 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
+    if args.motor == "drv8833-dual":
+        motor_label = "DRV8833 两轮底盘 · 输出上限 30%"
+    print(f"Homebot v0.7 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
     print(f"摄像头后端：{args.camera}（点击 Start camera 后才开启）", flush=True)
-    if args.motor != "mock":
+    if args.motor == "drv8833-dual":
+        print(f"A=左轮（反向校准 {args.invert_left}），B=右轮（反向校准 {args.invert_right}）。", flush=True)
+        print("先架空校准；换方向前 STOP 并等双轮停稳。GPIO23 常闭按钮反馈必须接好，由程序停止驱动并锁定控制。", flush=True)
+        print("电池正极用导线直连 VM，中间没有开关；程序卡死时须断开电池盒供电连接或取出电池。", flush=True)
+        print("按钮触发后先断开电池供电；保持断电复位、排查并重启服务，确认输出关闭后才恢复供电。", flush=True)
+    elif args.motor != "mock":
         print("仅连接 A 通道单电机，电机独立 4.5–6V 供电并共地；反转前先 STOP，等轴停稳。", flush=True)
     if args.lan:
         addresses = lan_addresses()
