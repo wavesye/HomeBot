@@ -989,7 +989,7 @@ test("dual drive reports channel mapping, polarity and a 30 percent PWM limit", 
   assert.match(page.get("#motor-help").textContent, /A Left \/ B Right.*changing direction.*0\.5 s.*both wheels stop/);
   assert.equal(page.get("#drive-calibration").hidden, false);
   assert.match(page.get("#drive-calibration").textContent, /A Left: normal.*B Right: inverted/);
-  assert.equal(page.get("#physical-stop-help").hidden, false);
+  assert.equal(page.get("#motor-power-help").hidden, false);
   assert.match(page.get("#controller-footer").textContent, /No wheel-speed feedback/);
   page.get("#speed-slider").value = "25";
   for (let i = 0; i < 2; i++) await page.runTimer(1000);
@@ -1013,7 +1013,7 @@ test("entering dual mode resets selection once and single motor or mock modes hi
   for (const motorMode of ["tb6612", "drv8833", "mock"]) {
     const page = await setup({ motor_mode: motorMode });
     assert.equal(page.get("#drive-calibration").hidden, true);
-    assert.equal(page.get("#physical-stop-help").hidden, true);
+    assert.equal(page.get("#motor-power-help").hidden, true);
     page.get("#speed-slider").value = "30";
     page.setServerStatus(dualStatus);
     await page.runTimer(1000);
@@ -1087,32 +1087,32 @@ test("a dual direction change rejection keeps its detail after safe STOP and nev
   await page.reply();
 });
 
-test("physical stop fault locks dual drive after release and ignores late heartbeat success", async () => {
+test("motor output fault locks dual drive and ignores late heartbeat success", async () => {
   const page = await setup(dualStatus);
   page.pointer("pointerdown", "right");
   await page.reply();
   await page.runTimer(500);
-  const fault = "Physical stop loop opened. Resetting the button does not clear the fault; restart the service.";
+  const fault = "Motor output failed. Cut motor power, check wiring, then restart the service.";
   page.setServerStatus({ fault, connected: false, direction: "stop", speed: 0,
-    command_id: null, control_epoch: "physical-stop" });
+    command_id: null, control_epoch: "motor-fault" });
   await page.runTimer(1000);
   assert.equal(page.buttons.some((button) => button.hasPointerCapture(1)), false);
   assert.equal(page.timerCount(500), 0);
-  assert.match(page.get("#error-message").textContent, /Motor fault.*Physical stop loop opened/);
+  assert.match(page.get("#error-message").textContent, /Motor fault.*Motor output failed/);
   await page.replyHeartbeat({ ...dualStatus, connected: true, direction: "right", speed: 0.2,
     command_id: "command-1", fault: null, watchdog_timeout_ms: 2000 });
   page.pointer("pointerup", "right");
   page.click("right", { pointerType: "touch" });
-  // 按钮复位后，服务仍报告锁定故障；页面不会清除它或重启旧动作。
+  // 服务仍报告输出故障；页面不会清除它或重启旧动作。
   await page.runTimer(1000);
   page.key("keydown", "KeyW");
   page.click("left");
   assert.equal(page.requests.length, 1);
   assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
   page.click("stop");
-  assert.equal(page.moveBodies.at(-1).control_epoch, "physical-stop");
+  assert.equal(page.moveBodies.at(-1).control_epoch, "motor-fault");
   await page.reply();
-  assert.match(page.get("#error-message").textContent, /Physical stop loop opened/);
+  assert.match(page.get("#error-message").textContent, /Motor output failed/);
   assert.equal(page.get("#speed-slider").disabled, true);
   page.setServerStatus({ fault: null, connected: true, control_epoch: "restarted-controller" });
   await page.runTimer(1000);
@@ -1127,11 +1127,11 @@ test("dual HTTP 503 drops queued motion, locks all four directions and leaves ST
   const page = await setup(dualStatus);
   page.key("keydown", "KeyA");
   page.key("keydown", "KeyD");
-  await page.replyHttpError(503, "Physical stop loop opened or disconnected.");
+  await page.replyHttpError(503, "Motor output failed.");
   assert.deepEqual(page.requests.map((request) => request.direction), ["left", "stop"]);
   assert.equal(page.buttons.filter((button) => button.dataset.direction !== "stop").every((button) => button.disabled), true);
   assert.equal(page.buttons.find((button) => button.dataset.direction === "stop").disabled, false);
-  await page.reply(false, { fault: "Physical stop loop opened or disconnected.", connected: false });
+  await page.reply(false, { fault: "Motor output failed.", connected: false });
   page.key("keyup", "KeyD");
   page.click("forward");
   assert.equal(page.requests.length, 2);

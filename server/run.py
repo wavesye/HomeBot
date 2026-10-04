@@ -68,9 +68,9 @@ def main(argv=None):
     print(f"摄像头后端：{args.camera}（点击 Start camera 后才开启）", flush=True)
     if args.motor == "drv8833-dual":
         print(f"A=左轮（反向校准 {args.invert_left}），B=右轮（反向校准 {args.invert_right}）。", flush=True)
-        print("先架空校准；换方向前 STOP 并等双轮停稳。GPIO23 常闭按钮反馈必须接好，由程序停止驱动并锁定控制。", flush=True)
+        print("先架空校准；换方向前 STOP 并等双轮停稳。当前不使用实体停止按钮，GPIO23 无需接线。", flush=True)
         print("电池正极用导线直连 VM，中间没有开关；程序卡死时须断开电池盒供电连接或取出电池。", flush=True)
-        print("按钮触发后先断开电池供电；保持断电复位、排查并重启服务，确认输出关闭后才恢复供电。", flush=True)
+        print("发生故障后先断开电池供电；保持断电排查并重启服务，确认输出关闭后才恢复供电。", flush=True)
     elif args.motor != "mock":
         print("仅连接 A 通道单电机，电机独立 4.5–6V 供电并共地；反转前先 STOP，等轴停稳。", flush=True)
     if args.lan:

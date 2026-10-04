@@ -131,7 +131,8 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(observed, [("drv8833-dual", left, right)])
                 self.assertIn("v0.7", output)
                 self.assertIn("30%", output)
-                self.assertIn("GPIO23", output)
+                self.assertIn("GPIO23 无需接线", output)
+                self.assertNotIn("常闭按钮反馈必须接好", output)
                 self.assertEqual(self.server.call_args.kwargs["workers"], 1)
                 self.assertFalse(self.server.call_args.kwargs["reload"])
 

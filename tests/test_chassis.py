@@ -1,10 +1,13 @@
-"""双轮 API、物理停止反馈与故障恢复约束；不访问 GPIO 或真实电机。"""
+"""双轮 API 与故障恢复约束；不访问 GPIO 或真实电机。"""
 import asyncio
 import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
-from server import main
+from server import drive, main
+from test_motor import FakeDevice, FakeFactory
 import test_safety as safety
 
 request = safety.request
@@ -98,58 +101,45 @@ class ChassisTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status["direction"], "stop")
                 self.assertEqual(status["stop_reason"], reason)
 
-    async def test_open_stop_circuit_locks_motion_even_after_switch_is_reset(self):
-        _, moving = await self.move()
-        old_epoch = main.status["control_epoch"]
-        self.motor.check_safety.side_effect = RuntimeError("NC contact opened")
-        with self.assertLogs(main.logger, level="ERROR"):
-            code, data = await request("GET", "/api/status")
-        self.assertEqual(code, 200)
-        self.assertEqual(data["direction"], "stop")
-        self.assertEqual(data["stop_reason"], "fault")
-        self.assertIn("Physical stop", data["fault"])
-        self.assertFalse(data["connected"])
-        self.assertNotEqual(data["control_epoch"], old_epoch)
-        self.motor.check_safety.side_effect = None  # 模拟用户复位开关，仍不能恢复。
-        self.assertEqual((await self.move())[0], 503)
-        _, stopped = await request("POST", "/api/heartbeat", {"command_id": moving["command_id"]})
-        self.assertEqual(stopped["direction"], "stop")
-        self.assertIsNone(main.command_deadline)
-        self.assertEqual((await self.move("stop", 0))[0], 200)
-        self.assertIsNotNone(main.status["fault"])
-        self.motor.forward.assert_called_once_with(0.2)
-
-    async def test_open_feedback_at_startup_keeps_status_available_but_output_off(self):
-        self.motor.check_safety.side_effect = RuntimeError("wire missing")
-        with self.assertLogs(main.logger, level="ERROR"):
+    async def test_gpio_controller_starts_moves_and_stops_without_button_or_gpio23(self):
+        factory = FakeFactory()
+        factory.fail_create = 23  # GPIO23 无论是否可用，都不应被双轮模式申请。
+        gpiozero = types.ModuleType("gpiozero")
+        gpiozero.DigitalOutputDevice = FakeDevice
+        gpiozero.PWMOutputDevice = FakeDevice  # 不提供 Button，防止再次引入按钮依赖。
+        with patch.dict(sys.modules, {"gpiozero": gpiozero}), patch.object(drive, "sleep"):
+            controller = drive.DRV8833DriveController(pin_factory=factory)
+        with patch.object(main, "build_motor", return_value=controller):
             async with main.lifespan(main.app):
-                self.assertIsNotNone(main.status["fault"])
-                self.assertEqual((await request("GET", "/api/status"))[0], 200)
-                self.assertEqual((await self.move())[0], 503)
-                self.motor.forward.assert_not_called()
+                code, data = await request("GET", "/api/status")
+                self.assertEqual(code, 200)
+                self.assertIsNone(data["fault"])
+                self.assertEqual(data["direction"], "stop")
+                self.assertTrue(all(device.value == 0 for device in factory.devices.values()))
+                with patch.object(drive, "sleep"):
+                    self.assertEqual((await self.move())[0], 200)
+                self.assertEqual(factory.devices[17].value, 0.2)
+                self.assertEqual(factory.devices[5].value, 0.2)
+                self.assertEqual((await self.move("stop", 0))[0], 200)
+                self.assertTrue(all(device.value == 0 for device in factory.devices.values()))
+        self.assertEqual(set(factory.devices), {17, 27, 5, 6, 22})
+        self.assertTrue(controller._closed)
 
-    async def test_background_stop_monitor_works_without_browser_requests(self):
+    async def test_background_timeout_stops_without_browser_requests(self):
         stopped = asyncio.Event()
         self.motor.stop.side_effect = stopped.set
-        with self.assertLogs(main.logger, level="ERROR"):
-            async with main.lifespan(main.app):
-                await self.move()
-                self.motor.check_safety.side_effect = RuntimeError("physical stop pressed")
-                await asyncio.wait_for(stopped.wait(), timeout=1)
-                self.assertEqual(main.status["direction"], "stop")
-                self.assertIsNotNone(main.status["fault"])
+        async with main.lifespan(main.app):
+            await self.move()
+            self.now += 2
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+            self.assertEqual(main.status["direction"], "stop")
+            self.assertEqual(main.status["stop_reason"], "timeout")
+            self.assertIsNone(main.status["fault"])
         self.motor.close.assert_called_once_with()
 
-    async def test_stop_monitor_also_latches_while_the_wheels_are_idle(self):
-        self.motor.check_safety.side_effect = RuntimeError("physical stop pressed")
-        with self.assertLogs(main.logger, level="ERROR"):
-            main.check_timeout()
-        self.assertIsNotNone(main.status["fault"])
-        self.assertEqual((await self.move())[0], 503)
-
-    async def test_input_read_error_and_failed_stop_are_not_reported_as_stopped(self):
+    async def test_timeout_with_failed_stop_is_not_reported_as_stopped(self):
         await self.move()
-        self.motor.check_safety.side_effect = OSError("GPIO read failed")
+        self.now += 2
         self.motor.stop.side_effect = OSError("GPIO write failed")
         with self.assertLogs(main.logger, level="ERROR"):
             main.check_timeout()

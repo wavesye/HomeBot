@@ -107,16 +107,7 @@ def stop_motion(reason: Literal["manual", "timeout", "shutdown", "fault"]):
 
 
 def check_timeout():
-    # 检测按钮 NC 回路后撤销驱动输出并锁定控制；按钮不直接切断 VM。
-    # 回调只锁存事件；程序无法运行时须手动断电，复位排查也须保持电机断电。
-    # 即使没有网页请求、甚至当前已停止，也持续检查；故障锁定后只重试 STOP。
-    if status["motor_mode"] == "drv8833-dual" and not status["fault"]:
-        try:
-            motor.check_safety()
-        except Exception:
-            set_motor_fault("Physical stop circuit opened or could not be read. Cut motor power, check the stop switch and wiring, then restart Homebot.")
-            logger.exception("Physical stop circuit fault; locking motor control")
-            stop_motion("fault")
+    # 无浏览器请求时也检查心跳超时，并重试未确认的停止。
     now = monotonic()
     if command_deadline is not None and now >= command_deadline:
         stop_motion("timeout")

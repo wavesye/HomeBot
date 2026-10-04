@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>HOMEbot · Remote Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=0.7.0">
-    <script src="/static/app.js?v=0.7.0" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=0.7.0-no-stop-button">
+    <script src="/static/app.js?v=0.7.0-no-stop-button" defer></script>
   </head>
   <body>
     <main class="controller">
@@ -36,7 +36,7 @@
         <div class="section-label"><h2>Movement</h2><span id="motor-mode">Checking controller…</span></div>
         <p id="motor-help" class="motor-help">Waiting for controller capabilities.</p>
         <p id="drive-calibration" class="drive-details" hidden></p>
-        <p id="physical-stop-help" class="physical-stop-help" hidden>The wired stop button needs a running service to disable motor output and lock control. It does not cut motor power. If stopping fails, disconnect motor power manually.</p>
+        <p id="motor-power-help" class="motor-power-help" hidden>STOP and connection timeout need a running service to disable motor output. If stopping fails, disconnect motor power manually.</p>
         <div class="direction-pad">
           <button class="forward" data-direction="forward"><span>↑</span>Forward</button>
           <button class="left" data-direction="left"><span>←</span>Left</button>

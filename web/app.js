@@ -102,7 +102,7 @@ function updateControllerDetails(status) {
   calibration.hidden = !dual;
   const polarity = (inverted) => inverted === true ? "inverted" : inverted === false ? "normal" : "not reported";
   calibration.textContent = dual ? `Polarity · A Left: ${polarity(status.left_inverted)} · B Right: ${polarity(status.right_inverted)}` : "";
-  document.querySelector("#physical-stop-help").hidden = !dual;
+  document.querySelector("#motor-power-help").hidden = !dual;
   document.querySelector("#backward-name").textContent = bench ? "Reverse" : "Backward";
   document.querySelector("#keyboard-keys").textContent = bench ? "W S" : "W A S D";
   document.querySelector("#keyboard-arrows").textContent = bench ? "↑ ↓" : "↑ ← ↓ →";

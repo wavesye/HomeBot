@@ -23,9 +23,6 @@ class MotorController:
     def stop(self):
         raise NotImplementedError
 
-    def check_safety(self):
-        """没有实体停止反馈的驱动无需额外检查；真实双轮驱动覆盖此方法。"""
-
     def close(self):
         self.stop()
 
