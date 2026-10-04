@@ -970,6 +970,7 @@ for (const motorMode of ["tb6612", "drv8833"]) {
 const dualStatus = {
   motor_mode: "drv8833-dual", supported_directions: ["forward", "backward", "left", "right", "stop"],
   max_speed: 0.3, battery: null, control_epoch: "dual-start", left_inverted: false, right_inverted: true,
+  left_scale: 1, right_scale: 1,
 };
 
 test("dual drive reports channel mapping, polarity and a 30 percent PWM limit", async () => {
@@ -989,6 +990,8 @@ test("dual drive reports channel mapping, polarity and a 30 percent PWM limit", 
   assert.match(page.get("#motor-help").textContent, /A Left \/ B Right.*changing direction.*0\.5 s.*both wheels stop/);
   assert.equal(page.get("#drive-calibration").hidden, false);
   assert.match(page.get("#drive-calibration").textContent, /A Left: normal.*B Right: inverted/);
+  assert.equal(page.get("#drive-pwm-calibration").hidden, false);
+  assert.match(page.get("#drive-pwm-calibration").textContent, /PWM calibration.*A Left: 100%.*B Right: 100%/);
   assert.equal(page.get("#motor-power-help").hidden, false);
   assert.match(page.get("#controller-footer").textContent, /No wheel-speed feedback/);
   page.get("#speed-slider").value = "25";
@@ -1009,18 +1012,57 @@ test("dual polarity reflects reported calibration without inventing missing valu
   assert.match(page.get("#drive-calibration").textContent, /A Left: not reported.*B Right: not reported/);
 });
 
+test("dual PWM calibration reports scales and leaves the total PWM command unchanged", async () => {
+  const page = await setup({ ...dualStatus, left_scale: 0.98, right_scale: 1 });
+  assert.equal(page.get("#drive-pwm-calibration").textContent,
+    "PWM calibration · A Left: 98% · B Right: 100%. On your next press, wheel PWM = selected PWM × scale; scales are set at service startup.");
+  page.get("#speed-slider").value = "25";
+  for (let i = 0; i < 2; i++) await page.runTimer(1000);
+  assert.equal(page.get("#speed-slider").value, "25");
+  assert.equal(page.get("#selected-speed").textContent, "25%");
+  assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: 98%.*B Right: 100%/);
+  page.click("forward");
+  assert.deepEqual(page.moveBodies[0], { direction: "forward", speed: 0.25, control_epoch: "dual-start" });
+  await page.reply();
+  assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: 98%.*B Right: 100%/);
+  await page.runTimer(500);
+  await page.replyHeartbeat();
+  assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: 98%.*B Right: 100%/);
+  assert.equal(page.requests.length, 1);
+});
+
+test("dual PWM calibration never invents missing or invalid scale values", async () => {
+  const page = await setup({ ...dualStatus, left_scale: undefined, right_scale: undefined });
+  assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: not reported.*B Right: not reported/);
+  for (const invalid of [null, "0.98", true, 0, -0.1, 1.01, Infinity, NaN]) {
+    page.setServerStatus({ left_scale: invalid, right_scale: 0.975 });
+    await page.runTimer(1000);
+    assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: not reported.*B Right: 97\.5%/);
+    page.setServerStatus({ left_scale: 0.98, right_scale: invalid });
+    await page.runTimer(1000);
+    assert.match(page.get("#drive-pwm-calibration").textContent, /A Left: 98%.*B Right: not reported/);
+  }
+});
+
 test("entering dual mode resets selection once and single motor or mock modes hide dual details", async () => {
   for (const motorMode of ["tb6612", "drv8833", "mock"]) {
     const page = await setup({ motor_mode: motorMode });
     assert.equal(page.get("#drive-calibration").hidden, true);
+    assert.equal(page.get("#drive-pwm-calibration").hidden, true);
+    assert.equal(page.get("#drive-pwm-calibration").textContent, "");
     assert.equal(page.get("#motor-power-help").hidden, true);
     page.get("#speed-slider").value = "30";
     page.setServerStatus(dualStatus);
     await page.runTimer(1000);
     assert.equal(page.get("#speed-slider").value, "20");
+    assert.equal(page.get("#drive-pwm-calibration").hidden, false);
     page.get("#speed-slider").value = "25";
     await page.runTimer(1000);
     assert.equal(page.get("#speed-slider").value, "25");
+    page.setServerStatus({ motor_mode: motorMode, left_scale: null, right_scale: null });
+    await page.runTimer(1000);
+    assert.equal(page.get("#drive-pwm-calibration").hidden, true);
+    assert.equal(page.get("#drive-pwm-calibration").textContent, "");
   }
 });
 

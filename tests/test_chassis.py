@@ -21,6 +21,8 @@ class ChassisTests(unittest.IsolatedAsyncioTestCase):
         self.motor.supported_directions = ("forward", "backward", "left", "right", "stop")
         self.motor.invert_left = False
         self.motor.invert_right = True
+        self.motor.left_scale = 0.98
+        self.motor.right_scale = 1.0
         main.reset_status(self.motor)
 
     async def move(self, direction="forward", speed=0.2, **extra):
@@ -37,6 +39,8 @@ class ChassisTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["supported_directions"], list(self.motor.supported_directions))
         self.assertFalse(data["left_inverted"])
         self.assertTrue(data["right_inverted"])
+        self.assertEqual(data["left_scale"], 0.98)
+        self.assertEqual(data["right_scale"], 1.0)
         self.assertIsNone(data["battery"])
         self.assertEqual(data["direction"], "stop")
 
@@ -108,18 +112,22 @@ class ChassisTests(unittest.IsolatedAsyncioTestCase):
         gpiozero.DigitalOutputDevice = FakeDevice
         gpiozero.PWMOutputDevice = FakeDevice  # 不提供 Button，防止再次引入按钮依赖。
         with patch.dict(sys.modules, {"gpiozero": gpiozero}), patch.object(drive, "sleep"):
-            controller = drive.DRV8833DriveController(pin_factory=factory)
+            controller = drive.DRV8833DriveController(pin_factory=factory, left_scale=0.98, right_scale=1.0)
         with patch.object(main, "build_motor", return_value=controller):
             async with main.lifespan(main.app):
                 code, data = await request("GET", "/api/status")
                 self.assertEqual(code, 200)
                 self.assertIsNone(data["fault"])
                 self.assertEqual(data["direction"], "stop")
+                self.assertEqual(data["left_scale"], 0.98)
+                self.assertEqual(data["right_scale"], 1.0)
                 self.assertTrue(all(device.value == 0 for device in factory.devices.values()))
                 with patch.object(drive, "sleep"):
-                    self.assertEqual((await self.move())[0], 200)
-                self.assertEqual(factory.devices[17].value, 0.2)
-                self.assertEqual(factory.devices[5].value, 0.2)
+                    code, moving = await self.move(speed=0.25)
+                    self.assertEqual(code, 200)
+                    self.assertEqual(moving["speed"], 0.25)  # API 保留总命令，不冒充轮速测量。
+                self.assertAlmostEqual(factory.devices[17].value, 0.245)
+                self.assertEqual(factory.devices[5].value, 0.25)
                 self.assertEqual((await self.move("stop", 0))[0], 200)
                 self.assertTrue(all(device.value == 0 for device in factory.devices.values()))
         self.assertEqual(set(factory.devices), {17, 27, 5, 6, 22})
@@ -164,12 +172,28 @@ class ChassisTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DriveSelectionTests(unittest.TestCase):
-    def test_dual_constructor_receives_only_explicit_polarity_values(self):
+    def test_dual_constructor_receives_explicit_polarity_and_scale_values(self):
         with patch("server.drive.DRV8833DriveController") as controller:
             for left, right in (("0", "0"), ("1", "0"), ("0", "1"), ("1", "1")):
-                with self.subTest(left=left, right=right), patch.dict(os.environ, {"HOMEBOT_MOTOR": "drv8833-dual", "HOMEBOT_INVERT_LEFT": left, "HOMEBOT_INVERT_RIGHT": right}):
+                with self.subTest(left=left, right=right), patch.dict(os.environ, {"HOMEBOT_MOTOR": "drv8833-dual", "HOMEBOT_INVERT_LEFT": left, "HOMEBOT_INVERT_RIGHT": right, "HOMEBOT_LEFT_SCALE": "0.98", "HOMEBOT_RIGHT_SCALE": "1"}):
                     self.assertIs(main.build_motor(), controller.return_value)
-                    controller.assert_called_with(invert_left=left == "1", invert_right=right == "1")
+                    controller.assert_called_with(invert_left=left == "1", invert_right=right == "1", left_scale=0.98, right_scale=1.0)
+
+    def test_invalid_scale_environment_prevents_gpio_controller_creation(self):
+        for name in ("HOMEBOT_LEFT_SCALE", "HOMEBOT_RIGHT_SCALE"):
+            for value in ("0", "-0.1", "1.01", "nan", "inf", "-inf", "true", "", "bad"):
+                environment = {"HOMEBOT_MOTOR": "drv8833-dual", "HOMEBOT_INVERT_LEFT": "0", "HOMEBOT_INVERT_RIGHT": "0", "HOMEBOT_LEFT_SCALE": "1", "HOMEBOT_RIGHT_SCALE": "1", name: value}
+                with self.subTest(name=name, value=value), patch.dict(os.environ, environment), patch("server.drive.DRV8833DriveController") as controller:
+                    with self.assertRaisesRegex(ValueError, name):
+                        main.build_motor()
+                    controller.assert_not_called()
+
+    def test_missing_scale_environment_defaults_to_equal_outputs(self):
+        with patch.dict(os.environ, {"HOMEBOT_MOTOR": "drv8833-dual", "HOMEBOT_INVERT_LEFT": "0", "HOMEBOT_INVERT_RIGHT": "0"}), patch("server.drive.DRV8833DriveController") as controller:
+            os.environ.pop("HOMEBOT_LEFT_SCALE", None)
+            os.environ.pop("HOMEBOT_RIGHT_SCALE", None)
+            main.build_motor()
+            controller.assert_called_once_with(invert_left=False, invert_right=False, left_scale=1.0, right_scale=1.0)
 
     def test_invalid_calibration_or_missing_hardware_does_not_fall_back_to_mock(self):
         with patch.dict(os.environ, {"HOMEBOT_MOTOR": "drv8833-dual", "HOMEBOT_INVERT_LEFT": "bad", "HOMEBOT_INVERT_RIGHT": "0"}), patch("server.drive.DRV8833DriveController") as controller:

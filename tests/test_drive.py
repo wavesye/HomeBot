@@ -73,6 +73,8 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(motor.max_speed, 0.3)
         self.assertFalse(motor.invert_left)
         self.assertFalse(motor.invert_right)
+        self.assertEqual(motor.left_scale, 1.0)
+        self.assertEqual(motor.right_scale, 1.0)
         self.sleep.assert_not_called()
         self.local_factory.assert_not_called()
 
@@ -101,6 +103,54 @@ class DriveTests(unittest.TestCase):
                         self.assertEqual(self.factory.devices[pin].value, 0.3 if pin in (left_pin, right_pin) else 0)
             motor.close()
 
+    def test_scaled_pwm_stays_with_its_wheel_in_all_directions_and_polarities(self):
+        methods = ("forward", "backward", "turn_left", "turn_right")
+        active_pins = {
+            (False, False): ((17, 5), (27, 6), (27, 5), (17, 6)),
+            (True, False): ((27, 5), (17, 6), (17, 5), (27, 6)),
+            (False, True): ((17, 6), (27, 5), (27, 6), (17, 5)),
+            (True, True): ((27, 6), (17, 5), (17, 6), (27, 5)),
+        }
+        for (inverted_left, inverted_right), pins in active_pins.items():
+            motor = self.create(
+                invert_left=inverted_left, invert_right=inverted_right,
+                left_scale=0.9, right_scale=0.8,
+            )
+            for method, (left_pin, right_pin) in zip(methods, pins):
+                with self.subTest(left=inverted_left, right=inverted_right, method=method):
+                    self.factory.events.clear()
+                    getattr(motor, method)(0.3)
+                    self.assertEqual(self.factory.events, [
+                        *self.STOP_WRITES, ("write", 22, 1), ("wake", 0.001),
+                        ("write", left_pin, 0.27), ("write", right_pin, 0.24),
+                    ])
+                    for pin in (17, 27, 5, 6):
+                        expected = 0.27 if pin == left_pin else 0.24 if pin == right_pin else 0
+                        self.assertAlmostEqual(self.factory.devices[pin].value, expected)
+                        self.assertLessEqual(self.factory.devices[pin].value, motor.max_speed)
+            motor.close()
+
+    def test_pwm_scale_validator_returns_float_without_opening_gpio(self):
+        for value in (1, 1.0, 0.9, 0.01):
+            with self.subTest(value=value):
+                result = drive.validate_pwm_scale(value)
+                self.assertIsInstance(result, float)
+                self.assertEqual(result, value)
+        self.assertEqual(self.factory.events, [])
+        self.local_factory.assert_not_called()
+
+    def test_invalid_scales_fail_before_any_gpio_is_opened(self):
+        invalid = (
+            0, -0.0, -0.1, 1.000001, float("nan"), float("inf"), -float("inf"),
+            None, True, False, "0.9", complex(0.9, 0), 10**1000,
+        )
+        for value in invalid:
+            for side in ("left", "right"):
+                with self.subTest(side=side, value=value), self.assertRaisesRegex(ValueError, "PWM scale.*finite.*1"):
+                    drive.DRV8833DriveController(**{f"{side}_scale": value})
+        self.assertEqual(self.factory.events, [])
+        self.local_factory.assert_not_called()
+
     def test_invalid_inversion_settings_fail_before_gpio_is_opened(self):
         for kwargs in ({"invert_left": "false"}, {"invert_right": 1}, {"invert_left": None}):
             with self.assertRaisesRegex(ValueError, "bool"):
@@ -108,7 +158,7 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(self.factory.events, [])
 
     def test_invalid_speeds_never_write_outputs(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         self.factory.events.clear()
         for speed in (-0.1, 0.300001, 0.4, 1, float("nan"), float("inf"), -float("inf"), None, True, False, "0.2", 10**1000):
             for method in (motor.forward, motor.backward, motor.turn_left, motor.turn_right):
@@ -117,15 +167,28 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(self.factory.events, [])
 
     def test_zero_speed_stops_all_outputs(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         for method in (motor.forward, motor.backward, motor.turn_left, motor.turn_right):
             self.factory.events.clear()
             method(0)
             self.assertEqual(self.factory.events, self.STOP_WRITES)
         self.sleep.assert_not_called()
 
+    def test_zero_speed_stops_an_active_scaled_and_inverted_drive(self):
+        motor = self.create(invert_left=True, invert_right=True, left_scale=0.9, right_scale=0.8)
+        for method in (motor.forward, motor.backward, motor.turn_left, motor.turn_right):
+            motor.forward(0.3)
+            self.assertEqual(self.factory.devices[27].value, 0.27)
+            self.assertEqual(self.factory.devices[6].value, 0.24)
+            self.factory.events.clear()
+            self.sleep.reset_mock()
+            method(0)
+            self.assertEqual(self.factory.events, self.STOP_WRITES)
+            self.assert_all_low()
+            self.sleep.assert_not_called()
+
     def test_stop_failure_attempts_all_outputs_and_can_be_retried(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         motor.forward(0.2)
         self.factory.fail_writes = {(22, 0): 1, (17, 0): 1, (5, 0): 1}
         self.factory.events.clear()
@@ -136,8 +199,8 @@ class DriveTests(unittest.TestCase):
         self.assert_all_low()
 
     def test_each_movement_write_failure_stops_and_keeps_resources_for_retry(self):
-        motor = self.create()
-        for pin, value in ((22, 0), (17, 0), (27, 0), (5, 0), (6, 0), (22, 1), (17, 0.2), (5, 0.2)):
+        motor = self.create(left_scale=0.9, right_scale=0.8)
+        for pin, value in ((22, 0), (17, 0), (27, 0), (5, 0), (6, 0), (22, 1), (17, 0.2 * 0.9), (5, 0.2 * 0.8)):
             with self.subTest(pin=pin, value=value):
                 self.factory.events.clear()
                 self.factory.fail_writes = {(pin, value): 1}
@@ -149,7 +212,7 @@ class DriveTests(unittest.TestCase):
                 self.assertFalse(motor._closed)
 
     def test_movement_and_stop_failure_are_both_reported_without_releasing_pins(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         def fail_after_wake(seconds):
             self.factory.fail_writes = {(22, 0): 1}
             raise RuntimeError("wake error")
@@ -167,7 +230,7 @@ class DriveTests(unittest.TestCase):
                 self.factory.devices.clear()
                 self.factory.fail_create = fail_pin
                 with self.assertRaisesRegex(RuntimeError, "initialization failed"):
-                    drive.DRV8833DriveController(pin_factory=self.factory)
+                    drive.DRV8833DriveController(pin_factory=self.factory, left_scale=0.9, right_scale=0.8)
                 created = set(self.factory.devices)
                 stopped = {event[1] for event in self.factory.events if event[0] == "write"}
                 closed = {event[1] for event in self.factory.events if event[0] == "close"}
@@ -185,7 +248,7 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(self.factory.events, [])
 
     def test_close_stops_and_releases_sleep_last(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         motor.forward(0.2)
         self.factory.events.clear()
         motor.close()
@@ -201,7 +264,7 @@ class DriveTests(unittest.TestCase):
             motor.forward(0.2)
 
     def test_close_attempts_all_resources_and_keeps_cleanup_failure_visible(self):
-        motor = self.create()
+        motor = self.create(left_scale=0.9, right_scale=0.8)
         self.factory.fail_writes = {(22, 0): 1}
         self.factory.fail_close = {17, 5}
         self.factory.fail_factory_close = True

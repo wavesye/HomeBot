@@ -87,7 +87,7 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_status_and_version(self):
         code, data = await request("GET", "/api/status")
         self.assertEqual(code, 200)
-        self.assertEqual(main.app.version, "0.7.0")
+        self.assertEqual(main.app.version, "0.7.1")
         self.assertEqual(data, {
             "connected": True, "direction": "stop", "speed": 0, "battery": 100,
             "command_id": None, "stop_reason": None, "watchdog_timeout_ms": 2000,
@@ -95,6 +95,7 @@ class SafetyTests(unittest.IsolatedAsyncioTestCase):
             "supported_directions": ["forward", "backward", "left", "right", "stop"],
             "control_epoch": data["control_epoch"],
             "left_inverted": None, "right_inverted": None,
+            "left_scale": None, "right_scale": None,
         })
         self.assertEqual(UUID(data["control_epoch"]).version, 4)
         self.motor.stop.assert_not_called()

@@ -19,6 +19,15 @@ def port_number(value):
     return port
 
 
+def wheel_scale(value):
+    from server.drive import validate_pwm_scale
+
+    try:
+        return validate_pwm_scale(float(value))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("PWM 校准系数必须为大于 0、不超过 1 的有限数值。") from error
+
+
 def lan_addresses():
     """用本机主机名找 IPv4 候选地址；无法识别时由终端给出手动查询提示。"""
     try:
@@ -44,10 +53,14 @@ def main(argv=None):
     parser.add_argument("--motor", choices=("mock", "tb6612", "drv8833", "drv8833-dual"), default="mock", help="mock 为虚拟电机；tb6612 / drv8833 为单电机台架；drv8833-dual 为两轮底盘。")
     parser.add_argument("--invert-left", action="store_true", help="反转 A 通道左轮的安装方向（仅 drv8833-dual）。")
     parser.add_argument("--invert-right", action="store_true", help="反转 B 通道右轮的安装方向（仅 drv8833-dual）。")
+    parser.add_argument("--left-scale", type=wheel_scale, help="左轮 PWM 校准系数，大于 0 且不超过 1（默认 1，仅 drv8833-dual）。")
+    parser.add_argument("--right-scale", type=wheel_scale, help="右轮 PWM 校准系数，大于 0 且不超过 1（默认 1，仅 drv8833-dual）。")
     parser.add_argument("--camera", choices=("opencv", "picamera2"), default=os.environ.get("HOMEBOT_CAMERA", "opencv"), help="摄像头后端（默认 HOMEBOT_CAMERA 或 opencv；Pi CSI 使用 picamera2）。")
     args = parser.parse_args(argv)
     if (args.invert_left or args.invert_right) and args.motor != "drv8833-dual":
         parser.error("--invert-left / --invert-right 只适用于 --motor drv8833-dual。")
+    if (args.left_scale is not None or args.right_scale is not None) and args.motor != "drv8833-dual":
+        parser.error("--left-scale / --right-scale 只适用于 --motor drv8833-dual。")
     if args.camera not in ("opencv", "picamera2"):
         parser.error("HOMEBOT_CAMERA must be opencv or picamera2.")
     os.environ["HOMEBOT_CAMERA"] = args.camera
@@ -56,6 +69,9 @@ def main(argv=None):
     os.environ["HOMEBOT_MOTOR"] = args.motor
     os.environ["HOMEBOT_INVERT_LEFT"] = "1" if args.invert_left else "0"
     os.environ["HOMEBOT_INVERT_RIGHT"] = "1" if args.invert_right else "0"
+    # 不沿用旧 shell 的输出校准；每次启动显式传入已验证的系数。
+    os.environ["HOMEBOT_LEFT_SCALE"] = str(args.left_scale if args.left_scale is not None else 1.0)
+    os.environ["HOMEBOT_RIGHT_SCALE"] = str(args.right_scale if args.right_scale is not None else 1.0)
     access_code = os.environ.get("HOMEBOT_ACCESS_CODE", "")
     if args.lan and not access_code:
         access_code = secrets.token_urlsafe(12)
@@ -64,10 +80,11 @@ def main(argv=None):
     motor_label = "虚拟电机" if args.motor == "mock" else f"{args.motor.upper()} 单电机台架 · 输出上限 40%"
     if args.motor == "drv8833-dual":
         motor_label = "DRV8833 两轮底盘 · 输出上限 30%"
-    print(f"Homebot v0.7 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
+    print(f"Homebot v0.7.1 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
     print(f"摄像头后端：{args.camera}（点击 Start camera 后才开启）", flush=True)
     if args.motor == "drv8833-dual":
         print(f"A=左轮（反向校准 {args.invert_left}），B=右轮（反向校准 {args.invert_right}）。", flush=True)
+        print(f"PWM 校准：左轮 ×{os.environ['HOMEBOT_LEFT_SCALE']}，右轮 ×{os.environ['HOMEBOT_RIGHT_SCALE']}；实际 PWM = 网页设置 × 各轮系数。", flush=True)
         print("先架空校准；换方向前 STOP 并等双轮停稳。当前不使用实体停止按钮，GPIO23 无需接线。", flush=True)
         print("电池正极用导线直连 VM，中间没有开关；程序卡死时须断开电池盒供电连接或取出电池。", flush=True)
         print("发生故障后先断开电池供电；保持断电排查并重启服务，确认输出关闭后才恢复供电。", flush=True)

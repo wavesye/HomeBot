@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>HOMEbot · Remote Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=0.7.0-no-stop-button">
-    <script src="/static/app.js?v=0.7.0-no-stop-button" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=0.7.1">
+    <script src="/static/app.js?v=0.7.1" defer></script>
   </head>
   <body>
     <main class="controller">
       <header>
-        <span class="version">HOMEbot · V0.7</span>
+        <span class="version">HOMEbot · V0.7.1</span>
         <h1>HOMEbot<span class="brand-dot">.</span></h1>
         <p>Remote Control · Local Wi-Fi</p>
       </header>
@@ -36,6 +36,7 @@
         <div class="section-label"><h2>Movement</h2><span id="motor-mode">Checking controller…</span></div>
         <p id="motor-help" class="motor-help">Waiting for controller capabilities.</p>
         <p id="drive-calibration" class="drive-details" hidden></p>
+        <p id="drive-pwm-calibration" class="drive-details" hidden></p>
         <p id="motor-power-help" class="motor-power-help" hidden>STOP and connection timeout need a running service to disable motor output. If stopping fails, disconnect motor power manually.</p>
         <div class="direction-pad">
           <button class="forward" data-direction="forward"><span>↑</span>Forward</button>

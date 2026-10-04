@@ -129,7 +129,7 @@ class LauncherTests(unittest.TestCase):
                 self.server.side_effect = lambda *a, **k: observed.append((os.environ["HOMEBOT_MOTOR"], os.environ["HOMEBOT_INVERT_LEFT"], os.environ["HOMEBOT_INVERT_RIGHT"]))
                 output = self.launch(["--motor", "drv8833-dual", "--lan", *flags])
                 self.assertEqual(observed, [("drv8833-dual", left, right)])
-                self.assertIn("v0.7", output)
+                self.assertIn("v0.7.1", output)
                 self.assertIn("30%", output)
                 self.assertIn("GPIO23 无需接线", output)
                 self.assertNotIn("常闭按钮反馈必须接好", output)
@@ -144,10 +144,43 @@ class LauncherTests(unittest.TestCase):
         self.server.assert_not_called()
 
     def test_old_calibration_environment_is_not_reused_by_launcher(self):
-        os.environ.update(HOMEBOT_INVERT_LEFT="1", HOMEBOT_INVERT_RIGHT="1")
+        os.environ.update(HOMEBOT_INVERT_LEFT="1", HOMEBOT_INVERT_RIGHT="1", HOMEBOT_LEFT_SCALE="0.7", HOMEBOT_RIGHT_SCALE="0.8")
         self.launch(["--motor", "drv8833-dual"])
         self.assertEqual(os.environ["HOMEBOT_INVERT_LEFT"], "0")
         self.assertEqual(os.environ["HOMEBOT_INVERT_RIGHT"], "0")
+        self.assertEqual(os.environ["HOMEBOT_LEFT_SCALE"], "1.0")
+        self.assertEqual(os.environ["HOMEBOT_RIGHT_SCALE"], "1.0")
+
+    def test_wheel_scales_are_passed_before_start_and_preserve_polarity(self):
+        observed = []
+        self.server.side_effect = lambda *a, **k: observed.append((os.environ["HOMEBOT_LEFT_SCALE"], os.environ["HOMEBOT_RIGHT_SCALE"], os.environ["HOMEBOT_INVERT_RIGHT"]))
+        output = self.launch(["--motor", "drv8833-dual", "--left-scale", "0.98", "--right-scale", "1", "--invert-right"])
+        self.assertEqual(observed, [("0.98", "1.0", "1")])
+        self.assertIn("PWM 校准：左轮 ×0.98，右轮 ×1.0", output)
+        self.assertIn("v0.7.1", output)
+
+    def test_either_wheel_scale_can_be_selected_without_changing_the_other(self):
+        for side in ("left", "right"):
+            with self.subTest(side=side):
+                self.launch(["--motor", "drv8833-dual", f"--{side}-scale", "0.96"])
+                self.assertEqual(os.environ[f"HOMEBOT_{side.upper()}_SCALE"], "0.96")
+                other = "RIGHT" if side == "left" else "LEFT"
+                self.assertEqual(os.environ[f"HOMEBOT_{other}_SCALE"], "1.0")
+
+    def test_invalid_wheel_scales_do_not_start_server(self):
+        for flag in ("--left-scale", "--right-scale"):
+            for value in ("0", "-0.1", "1.01", "nan", "inf", "-inf", "true", "bad"):
+                with self.subTest(flag=flag, value=value), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    run.main(["--motor", "drv8833-dual", f"{flag}={value}"])
+                self.assertEqual(error.exception.code, 2)
+        self.server.assert_not_called()
+
+    def test_explicit_wheel_scales_are_rejected_in_other_modes_even_if_one(self):
+        for mode in ("mock", "tb6612", "drv8833"):
+            for flag in ("--left-scale", "--right-scale"):
+                with self.subTest(mode=mode, flag=flag), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    run.main(["--motor", mode, flag, "1"])
+        self.server.assert_not_called()
 
     def test_port_boundaries_are_valid(self):
         self.assertEqual(run.port_number("1"), 1)

@@ -102,6 +102,13 @@ function updateControllerDetails(status) {
   calibration.hidden = !dual;
   const polarity = (inverted) => inverted === true ? "inverted" : inverted === false ? "normal" : "not reported";
   calibration.textContent = dual ? `Polarity · A Left: ${polarity(status.left_inverted)} · B Right: ${polarity(status.right_inverted)}` : "";
+  const pwmCalibration = document.querySelector("#drive-pwm-calibration");
+  pwmCalibration.hidden = !dual;
+  const scalePercent = (scale) => Number.isFinite(scale) && scale > 0 && scale <= 1
+    ? `${Number((scale * 100).toPrecision(6))}%` : "not reported";
+  pwmCalibration.textContent = dual
+    ? `PWM calibration · A Left: ${scalePercent(status.left_scale)} · B Right: ${scalePercent(status.right_scale)}. On your next press, wheel PWM = selected PWM × scale; scales are set at service startup.`
+    : "";
   document.querySelector("#motor-power-help").hidden = !dual;
   document.querySelector("#backward-name").textContent = bench ? "Reverse" : "Backward";
   document.querySelector("#keyboard-keys").textContent = bench ? "W S" : "W A S D";

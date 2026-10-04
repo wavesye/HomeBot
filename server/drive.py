@@ -10,6 +10,16 @@ from time import sleep
 from server.motor import MotorController
 
 
+def validate_pwm_scale(value):
+    """校准只衰减单轮输出，不放大输出或代替 STOP。"""
+    if (
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not 0 < value <= 1 or not isfinite(value)
+    ):
+        raise ValueError("Wheel PWM scale must be finite and greater than 0 and at most 1.")
+    return float(value)
+
+
 class DRV8833DriveController(MotorController):
     """转向变化前的 STOP 和 0.5 秒等待由单进程服务层统一检查。"""
 
@@ -25,11 +35,16 @@ class DRV8833DriveController(MotorController):
     PWM_FREQUENCY = 1000
     WAKE_DELAY_SECONDS = 0.001
 
-    def __init__(self, *, pin_factory=None, invert_left=False, invert_right=False):
+    def __init__(
+        self, *, pin_factory=None, invert_left=False, invert_right=False,
+        left_scale=1.0, right_scale=1.0,
+    ):
         if not isinstance(invert_left, bool) or not isinstance(invert_right, bool):
             raise ValueError("Wheel inversion settings must be bool values.")
         self.invert_left = invert_left
         self.invert_right = invert_right
+        self.left_scale = validate_pwm_scale(left_scale)
+        self.right_scale = validate_pwm_scale(right_scale)
         self._factory = pin_factory
         self._outputs = {}
         self._closed = False
@@ -79,11 +94,12 @@ class DRV8833DriveController(MotorController):
             self._outputs["NSLEEP"].value = 1
             sleep(self.WAKE_DELAY_SECONDS)
             # 每轮仅一根输入送 PWM，另一根保持低，使用 fast-decay 模式。
-            for prefix, positive, inverted in (
-                ("A", left > 0, self.invert_left), ("B", right > 0, self.invert_right),
+            for prefix, positive, inverted, scale in (
+                ("A", left > 0, self.invert_left, self.left_scale),
+                ("B", right > 0, self.invert_right, self.right_scale),
             ):
                 name = prefix + ("IN1" if positive != inverted else "IN2")
-                self._outputs[name].value = speed
+                self._outputs[name].value = speed * scale
         except Exception as error:
             cleanup = ""
             try:

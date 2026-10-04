@@ -35,6 +35,7 @@ status = {
     "supported_directions": ["forward", "backward", "left", "right", "stop"],
     "max_speed": 1.0, "fault": None, "control_epoch": str(uuid4()),
     "left_inverted": None, "right_inverted": None,
+    "left_scale": None, "right_scale": None,
 }
 command_deadline: float | None = None
 stop_retry_deadline: float | None = None
@@ -53,15 +54,20 @@ def build_motor():
         from server.drv8833 import DRV8833MotorController
         return DRV8833MotorController()
     if mode == "drv8833-dual":
-        from server.drive import DRV8833DriveController
+        from server.drive import DRV8833DriveController, validate_pwm_scale
         # 校准只在启动时读取；非法配置不得带着猜测的轮向运行。
-        polarities = {}
+        calibration = {}
         for side in ("left", "right"):
             value = os.environ.get(f"HOMEBOT_INVERT_{side.upper()}", "0")
             if value not in ("0", "1"):
                 raise ValueError(f"HOMEBOT_INVERT_{side.upper()} must be 0 or 1.")
-            polarities[f"invert_{side}"] = value == "1"
-        return DRV8833DriveController(**polarities)
+            calibration[f"invert_{side}"] = value == "1"
+            scale_name = f"HOMEBOT_{side.upper()}_SCALE"
+            try:
+                calibration[f"{side}_scale"] = validate_pwm_scale(float(os.environ.get(scale_name, "1")))
+            except ValueError as error:
+                raise ValueError(f"{scale_name} must be finite, greater than 0 and at most 1.") from error
+        return DRV8833DriveController(**calibration)
     raise ValueError("HOMEBOT_MOTOR must be mock, tb6612, drv8833 or drv8833-dual; no controller was started.")
 
 
@@ -77,6 +83,8 @@ def reset_status(controller):
         max_speed=controller.max_speed, fault=None, control_epoch=str(uuid4()),
         left_inverted=controller.invert_left if controller.mode == "drv8833-dual" else None,
         right_inverted=controller.invert_right if controller.mode == "drv8833-dual" else None,
+        left_scale=controller.left_scale if controller.mode == "drv8833-dual" else None,
+        right_scale=controller.right_scale if controller.mode == "drv8833-dual" else None,
     )
 
 
@@ -150,7 +158,7 @@ async def lifespan(app):
                 camera.stop()
 
 
-app = FastAPI(title="Homebot", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title="Homebot", version="0.7.1", lifespan=lifespan)
 app.add_middleware(AccessMiddleware)
 
 
