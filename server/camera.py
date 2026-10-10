@@ -66,6 +66,7 @@ class CameraController:
                     success, frame = self.capture.read()
                 if not success:
                     raise RuntimeError("Cannot read camera image. Check the camera and try again.")
+                frame = cv2.rotate(frame, cv2.ROTATE_180)  # Pi CSI 摄像头默认倒置。
                 success, jpeg = cv2.imencode(".jpg", frame)
                 if not success:
                     raise RuntimeError("Cannot encode camera image. Try starting the camera again.")

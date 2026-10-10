@@ -519,8 +519,8 @@ async function loadCameraFrame() {
     imageUrl = URL.createObjectURL(blob);
     cameraImage.src = imageUrl;
     cameraImage.hidden = false;
-    cameraStatus.textContent = "Live · refreshes up to 5 times per second";
-    frameTimer = setTimeout(loadCameraFrame, 200);
+    cameraStatus.textContent = "Live · refreshes up to 20 times per second";
+    frameTimer = setTimeout(loadCameraFrame, 50);
   } catch (error) {
     if (!cameraActive || session !== cameraSession) return;
     const stopped = await stopCamera();
