@@ -25,7 +25,7 @@ class DRV8833DriveController(MotorController):
 
     mode = "drv8833-dual"
     supported_directions = ("forward", "backward", "left", "right", "stop")
-    max_speed = 0.3
+    max_speed = 1.0
 
     AIN1 = 17  # 左轮，BCM 17 / 物理 11
     AIN2 = 27  # 左轮，BCM 27 / 物理 13
@@ -83,7 +83,7 @@ class DRV8833DriveController(MotorController):
             isinstance(speed, bool) or not isinstance(speed, (int, float))
             or not 0 <= speed <= self.max_speed or not isfinite(speed)
         ):
-            raise ValueError("DRV8833 dual speed must be finite and between 0 and 0.3.")
+            raise ValueError("DRV8833 dual speed must be finite and between 0 and 1.0.")
         if speed == 0:
             self.stop()
             return

@@ -79,7 +79,7 @@ def main(argv=None):
 
     motor_label = "虚拟电机" if args.motor == "mock" else f"{args.motor.upper()} 单电机台架 · 输出上限 40%"
     if args.motor == "drv8833-dual":
-        motor_label = "DRV8833 两轮底盘 · 输出上限 30%"
+        motor_label = "DRV8833 两轮底盘 · 输出上限 100%"
     print(f"Homebot v0.7.1 · {motor_label}\n本机：http://localhost:{args.port}", flush=True)
     print(f"摄像头后端：{args.camera}（点击 Start camera 后才开启）", flush=True)
     if args.motor == "drv8833-dual":
