@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 WATCHDOG_TIMEOUT_MS = 2000
 WATCHDOG_CHECK_INTERVAL_SECONDS = 0.1
 STOP_RETRY_SECONDS = 0.5
-REVERSE_PAUSE_SECONDS = 0.5
+REVERSE_PAUSE_SECONDS = 0.1
 REAL_MOTOR_MODES = ("tb6612", "drv8833", "drv8833-dual")
 
 # direction/speed 是已接受的输出命令，不是编码器测得的转向或转速。
@@ -204,9 +204,9 @@ async def move(command: MoveRequest):
     if real_motor and last_motion_direction and command.direction != last_motion_direction:
         if status["direction"] != "stop" or last_stopped_at is None or monotonic() - last_stopped_at < REVERSE_PAUSE_SECONDS:
             detail = (
-                "Press STOP, wait at least 0.5 seconds and let both wheels stop before changing direction."
+                "Press STOP, wait at least 0.1 seconds and let both wheels stop before changing direction."
                 if status["motor_mode"] == "drv8833-dual"
-                else "Press STOP, wait at least 0.5 seconds and let the shaft stop before reversing."
+                else "Press STOP, wait at least 0.1 seconds and let the shaft stop before reversing."
             )
             raise HTTPException(status_code=409, detail=detail)
 

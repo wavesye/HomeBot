@@ -2,3 +2,7 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+ROADMAP.md
+LEARNING.md
+README-verbose.md
+docs/

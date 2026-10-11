@@ -1,754 +1,310 @@
 # Homebot
 
-## What is Homebot?
+English | [简体中文](README.zh-CN.md)
 
-Homebot 是一个从零学习家庭机器人软件的项目。未来希望它能在家里移动、远程查看环境并执行简单动作；目前可以通过浏览器控制虚拟电机，并预览运行服务的电脑摄像头。
+Homebot is a Raspberry Pi based home robot project for remote control, video monitoring and autonomous robotics experiments.
 
-## Current Version
+Current version: **v0.7.1**
 
-Homebot v0.7.1 adds independent left/right PWM calibration to the DRV8833 two-wheel drive, retaining direction calibration, the 30% output limit, and software stop controls.
+---
 
-Virtual motor mode remains the default; a complete robot is not required.
+## See It in Action
 
-本版目标：在 Raspberry Pi 4B 上，通过用户现有 DRV8833 的 A/B 通道控制左右两轮，并用 `--left-scale` / `--right-scale` 独立减小单侧 PWM，实测改善跑偏。默认仍使用虚拟电机；双轮模式显式选择 `drv8833-dual`，PWM 初值 20%、上限 30%，支持单轮极性校准。按用户要求，本版不使用实体停止按钮，GPIO23（物理第 16 脚）留空；保留网页停止、心跳超时停止与 GPIO 输出异常后的故障锁定。原 v0.6 的 DRV8833/TB6612 单电机模式保留。
+<table>
+  <tr>
+    <td align="center"><b>Camera & Speed Control</b></td>
+    <td align="center"><b>Camera Demo</b></td>
+    <td align="center"><b>Driving Demo</b></td>
+  </tr>
+  <tr>
+    <td><img src="assets/AppManual.gif" width="300"></td>
+    <td><img src="assets/CameraView.gif" width="300"></td>
+    <td><img src="assets/HumanView.gif" width="200"></td>
+  </tr>
+</table>
 
-Connected 是软件控制状态；页面的方向与百分比是输出命令，不是实际转速或轴已停止的反馈，电量也尚未测量。真实 GPIO 操作异常会锁定控制，不能把未确认的硬件状态当作已停止；DRV8833 的 nFAULT 未接入，软件锁定不代表检测到芯片过流、过热或堵转。没有硬件时仍可运行全部虚拟电机功能。
+Current features:
 
-**用户已确认 v0.6 单电机测试和 v0.7 双电机台架测试通过；车轮已安装并落地试动，电机线调整后方向对应已解决。用户要求加入左右独立 PWM 校准，命名为 v0.7.1。** 视频 PWM 约 25%，Pi 与充电宝仍未固定；先固定并检查机械阻力，再按 [v0.7.1 独立校准](docs/v0.7.1-calibration.md) 复测，尚未确认直行通过，v0.8 未开始。原 v0.6、v0.7 实测反馈保留；基本接线与停止流程见 [v0.7 双轮接线与验收](docs/v0.7-drive.md)，版本路线见 [ROADMAP.md](ROADMAP.md)。
+- Browser remote control
+- Mobile control over local Wi-Fi
+- Camera preview
+- Dual motor drive
+- Independent left/right PWM calibration
+- Heartbeat + Watchdog safety stop
+- Mock motor mode for development without hardware
 
-## Run locally
+---
 
-需要 Python 3.10 或更新版本。在终端逐行运行以下命令。
+## Quick Start
 
-当前项目已经在本机，先进入目录：
+### Install
 
 ```bash
-cd /Users/waves/Documents/ChatGPT/homebot_v1
-```
+git clone https://github.com/wavesye/HomeBot.git
+cd HomeBot
 
-项目仓库为 [wavesye/HomeBot](https://github.com/wavesye/HomeBot)。本次 v0.7.1 修改在本机工作区，尚未据此宣称已推送或部署到 Pi，克隆远程可能得到旧版；同步到 Pi 时排除 Mac 的 `.venv`，保留 Pi 自己的环境，或在新目录按说明创建。
-
-macOS / Linux：
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+
+pip install -r requirements.txt
+```
+
+### Run on your computer
+
+```bash
 python -m server.run
 ```
 
-Windows PowerShell（先进入你下载的项目目录）：
+Open:
 
-```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m server.run
+```text
+http://localhost:8000
 ```
 
-保持终端运行，然后在浏览器打开：
+The default mode uses a virtual motor, so no Raspberry Pi is required.
 
-- 控制页面：http://localhost:8000
-- API 交互文档：http://localhost:8000/docs
-- 原始状态：http://localhost:8000/api/status
-
-只需这一个服务。HTML、CSS、JavaScript 和 API 都由 FastAPI 提供。电机输出出现在启动 Uvicorn 的终端中，不是在浏览器控制台。按 `Ctrl+C` 停止服务。
-
-从 v0.1 升级时，请重新执行 `python -m pip install -r requirements.txt`，安装新增的 OpenCV 依赖，再重启 Homebot。OpenCV 负责读摄像头和编码 JPEG，`headless` 表示不安装桌面图像窗口，画面由浏览器显示。
-
-每次重新打开终端，进入项目目录、激活 `.venv`，再执行启动命令即可。若 8000 端口被其他项目占用，可以执行 `python -m server.run --port 8001`，然后打开 http://localhost:8001。
-
-升级到 v0.7.1，沿用已安装的 GPIO Zero / lgpio，虚拟模式不需要 GPIO 依赖。重启服务、刷新页面，确认顶部 V0.7.1；上面的启动器默认选择虚拟电机。本机命令只供这台电脑访问，手机连接按 Wi-Fi 小节操作；真实双轮先完成下面的接线。
-
-## Two-wheel drive (v0.7)
-
-- **具体内容**：A 通道接左轮，B 通道接右轮；`--invert-left` / `--invert-right` 分别校准单轮方向；初值 20%、上限 30%；不使用实体停止按钮或 GPIO23 检测线。
-- **完成标准**：先架空验证四方向、停止、心跳超时，以及手动断 VM 后的排查/重启，再在平坦空地完成短距离低速前进、后退、左右转与停止。
-- **需要用户测试**：按 [新接线、方向校准与分阶段验收](docs/v0.7-drive.md) 操作。不将软件测试视为真实底盘已通过。
-
-**本版无需实体停止按钮；Pi GPIO23（物理第 16 脚）留空，无需短接到 GND。** 当前电池盒没有开关，AA 正极通过导线直连 VM。模块丝印 NC 表示不连接，全部留空；VM 绝不接 Pi GPIO。详见接线文档。
-
-完成接线后，双轮架空、VM 断电，再启动：
+### Run on Raspberry Pi
 
 ```bash
 python -m server.run --lan --motor drv8833-dual
 ```
 
-原来 BIN1/BIN2 的接地线必须先拆除，再接 BCM5（物理 29）与 BCM6（物理 31）。每次换方向都先 STOP，至少等 0.5 秒并观察两轮停稳；前进切左转也要遵守。网页停止和心跳超时依赖程序与操作系统运行，本身不切 VM；程序卡死或未能撤销输出时，需实际断开电池盒供电连接或取出电池，不能靠裸线碰触或带电拆 GPIO 停机。GPIO 输出异常后的故障锁定仍保留；排查和服务重启须保持电机断电，确认输出关闭且无 fault 后再恢复电池供电；改线须在 Pi 与电机两路都断电后进行。原有 Pi OS Lite、充电宝与 4AA 继续使用，先核对真实电压和两台电机所需的电源与线材能力。
-
-软件只报告命令与检测状态，不测轮速；断电后车轮会滑行。现有 Picamera2 功能保留，首次双轮测试不启用摄像头，本版不开展 v0.8 的视频遥控路线。
-
-## Independent wheel calibration (v0.7.1)
-
-双轮启动新增 `--left-scale` / `--right-scale`，默认均为 `1`，取值必须满足 `0 < scale <= 1`，仅用于 `drv8833-dual`。每侧实际 PWM 为网页基础输出乘该侧系数，四个方向都适用；系数不改变方向或提高 30% 上限。网页只读显示两侧系数及 PWM 计算方式，不显示实时两侧输出数值；没有编码器反馈或自动保持直线功能。
-
-先固定 Pi、充电宝和线材并检查轮子阻力，沿用已经验证的接线与 invert 参数。若固定后在 25% 前进时仍稳定偏右，可试小幅降低左侧；以下是试验起点，并非已确认的补偿值：
+With Raspberry Pi CSI Camera:
 
 ```bash
-python -m server.run --lan --motor drv8833-dual --left-scale 0.98 --right-scale 1
+python -m server.run \
+  --lan \
+  --motor drv8833-dual \
+  --camera picamera2
 ```
 
-网页基础输出设为 25% 时，两侧输出命令为左 24.5%、右 25%。如果原启动命令带有已验证的 `--invert-left` / `--invert-right`，一并保留；不要凭旧的方向问题重新添加参数。系数只在启动时设置，不自动保存；每次调整前断 VM、停止旧服务，再用完整命令重启。启动输出仍为零，刷新页面后需明确发起新动作。分别复测前进、后退、转弯和停止，记录命令与偏航，详见 [v0.7.1 校准及 Pi 同步步骤](docs/v0.7.1-calibration.md)。
+---
 
-## Single-motor bench (v0.6)
-
-本节保留已通过用户确认的单电机模式与原有说明，供复现和排查使用。当前双轮升级使用上面的 `drv8833-dual`，不要直接套用单电机 B 通道接地方案。
-
-- **具体内容**：接入 Pi 4B、当前 DRV8833 模块的 A 通道和一台减速电机；正转、停止、反转；默认虚拟模式，显式选择真实模式；限制输出、故障锁定及正常退出清理。另保留 TB6612FNG 对应驱动。
-- **完成标准**：同一网页控制台架电机转动与停止，启动不自转，STOP/松手/超时/正常退出撤销输出，恢复连接不自动转动。
-- **需要用户测试**：按 [断电接线与逐步验收](docs/v0.6-bench.md) 核对供电、接线、启动、20% 短测、停稳后反向及停止。源码与替身测试不代表真实 Pi 已验证。
-
-先读完接线与电源步骤，确认模块 STBY 接到芯片 nSLEEP 且没有会影响 Pi GPIO 的固定拉高或 VM 上拉，再在 Pi 上执行：
-
-```bash
-python -m server.run --lan --motor drv8833
-```
-
-普通 `python -m server.run --lan` 或显式 `--motor mock` 仍是虚拟模式。DRV8833 的 PWM 直接输出到 AIN1 或 AIN2，另一输入保持低；Pi 的 3.3V、5V、BCM18（物理 12）均不接该模块，NC 全部留空。`--motor tb6612` 只用于已核实的 TB6612FNG，专用接线与命令见 [台架文档附录](docs/v0.6-bench.md#附录仅供另一块已核实的-tb6612fng-模块)；选错可能使调速失效。
-
-`drv8833` / `tb6612` 单电机模式只允许两个方向；STOP 后至少等 0.5 秒并观察轴完全停下，才可反向。DRV8833 停止时将 STBY/nSLEEP 拉低、两路 PWM 归零，电机滑行停下；唤醒时两路输入保持低，等待至少 1ms 后才施加 PWM。它不提供机械急停或轴停转反馈。
-
-用户现有 Pi OS Lite 继续使用，通过 SSH 安装与启动。Pi 用充电宝（核对稳定 5V / 3A），电机用独立的 4 节 1.5V AA 并共地；电池组标称 6V，首次先实测是否在到手电机允许范围内，并确认是正确的 4 节串联电池盒，不能把 5 节盒随意少装一节。OV5647 已新增可选 Picamera2 后端，启动与独立验收见 [树莓派 CSI 预览](docs/pi-camera.md)；单电机台架测试仍不启用摄像头。具体接线与供电按台架文档核对。
-
-## Phone control over Wi-Fi (v0.5)
-
-### 启动与连接
-
-1. 手机与运行 Homebot 的电脑连接同一个可信 Wi-Fi。先在原服务终端按 `Ctrl+C` 停止旧服务，保留已激活的 `.venv`。
-2. 在项目目录运行：
-
-   ```bash
-   python -m server.run --lan
-   ```
-
-3. 保持终端运行，找到它打印的手机候选地址和本次访问码。自动识别不到地址、或候选地址不可用时，在电脑的 Wi-Fi 设置中查看 IPv4 地址。若端口被占用，改用 `python -m server.run --lan --port 8001`，并使用新端口的地址。
-4. 手机浏览器打开终端给出的 `http://电脑局域网IP:8000` 地址。不要在手机上使用 `localhost`，那代表手机自己；`0.0.0.0` 是服务监听地址，也不是手机应打开的地址。电脑切换 Wi-Fi 后，局域网 IP 可能变化，应重新查看地址。
-5. 在浏览器原生验证框中填写用户名 **`homebot`**，密码填写终端中的访问码。成功后应看到当前 V0.7.1 控制页面；未指定真实驱动时显示虚拟模式。
-
-每次局域网启动默认生成新的随机访问码。若需要自定义，在启动前设置环境变量 `HOMEBOT_ACCESS_CODE`；它的值就是密码，用户名仍是 `homebot`。不要把访问码写进网页地址、截图或代码仓库。浏览器可能记住本次验证，测试错误密码时使用新的无痕窗口。
-
-局域网启动器监听 `0.0.0.0`，使用单个服务进程，并关闭代理请求头解析。启用访问码后，页面、静态资源、API、摄像头和 `/docs` 均需要验证。本机 `python -m server.run` 可在没有访问码时供 `localhost` 使用；若绕过启动器直接将 Uvicorn 绑定到 `0.0.0.0` 而没有设置访问码，远程请求会收到 HTTP 503。请使用上面的局域网启动命令。
-
-访问码使用 [HTTP Basic 验证](https://fastapi.tiangolo.com/advanced/security/http-basic-auth/)。本版 HTTP 连接不加密，只适用于可信局域网；不要配置公网访问或路由器端口转发。验证方式的传输限制见 [MDN 说明](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Authentication)。
-
-### 手机怎么操作
-
-- 虚拟模式可将 Speed 调到例如 50%，再**按住**方向按钮移动；真实模式从 20% 短测，单电机最多 40%，双轮最多 30%。松开手指或触屏操作被取消时停止。触笔采用相同规则，需再次按住才会继续输出。
-- 点击 **STOP** 随时停止。移动中调整滑块仍只影响下一次动作。
-- 点击 **Start camera** 查看运行服务的电脑摄像头；点击 **Stop camera** 关闭并释放设备。手机摄像头不会被开启。
-- 手机布局缩小预览区域，让画面与控制按钮更容易同时查看；主要操作按钮至少为 44 像素的触控目标。
-- 锁屏、切换应用、隐藏或关闭页面时停止心跳并尽力发送 STOP。请求未送达时，后端在最后一次有效心跳满 2 秒后停止。解锁或恢复网络不会自动恢复移动，需要重新操作。
-
-电脑鼠标仍采用点击后持续移动，键盘仍采用按住移动、松开停止。建议一次只使用一个控制页面，因为所有页面共享当前电机控制器和摄像头。
-
-### 手机打不开时
-
-先核对终端仍在运行、地址与端口一致，手机和电脑连接的是同一个 Wi-Fi。访客网络、AP/客户端隔离可能禁止设备互相连接；可换用允许设备互通的可信网络。暂时退出影响局域网访问的 VPN 后重试。检查电脑防火墙是否允许启动 Homebot 的 Python/终端应用接收入站连接，按应用允许即可，不需要关闭整个防火墙。
-
-若已经弹出验证框，说明已连到服务，接下来核对 `homebot` 和当前终端中的访问码。服务重启后随机访问码会变化；浏览器仍使用旧码时，可在新无痕窗口重新输入。摄像头报错则按下面的摄像头排查步骤检查，访问页面成功不代表摄像头权限已授予。
-
-### 本版完成标准与用户测试
-
-v0.5 的原验收标准是：真实手机可在同一 Wi-Fi 下通过访问码进入页面，错误访问码被拒绝；电脑摄像头可查看、关闭并释放；虚拟模式 50% 方向操作、松开停止和 STOP 正常；锁屏或断网后停止，恢复连接不自动移动。保留的 [v0.5 手机清单](#v05-手机逐步验收待用户确认) 供核对，当前真实双轮验收使用 v0.7 文档，不用 50% 操作真实模式。
-
-## Keyboard control (v0.3 起)
-
-下表四方向适用于虚拟和双轮模式。v0.6 单电机模式只用 W / ↑、S / ↓ 与停止。双轮模式换方向前必须 STOP、等待至少 0.5 秒并观察两轮停稳，直接切换会被拒绝。
-
-先把 Speed 调到需要的值，再点击页面空白处，使焦点离开滑块。
-
-| 按键 | 动作 |
-| --- | --- |
-| W / ↑ | 前进 |
-| S / ↓ | 后退 |
-| A / ← | 左转 |
-| D / → | 右转 |
-| 空格 / 页面 STOP | 停止，速度归零 |
-
-按住方向键时移动，松开当前控制方向的按键时发送停止。按住期间不会重复发送相同移动指令，但 v0.4 会为已确认的当前动作每 500 毫秒发送心跳。页面会高亮当前按键对应的方向按钮。速度在按下时读取；持续按住时拖动滑块不会自动改变速度，松开再按即可使用新速度。
-
-虚拟模式同时按两个方向时，后按下的方向接管。例如按住 W 后再按 D，转为右转；松开 W 不影响 D，松开 D 则停止，不会自动回到前进。真实双轮不能借多键跳过换向等待。按空格停止后，仍按住的方向键也不会自动恢复移动，需要松开并重新按下。
-
-鼠标点击方向后持续移动，直到下一条指令、手动停止、页面失焦或连接失败；鼠标接管后，松开之前的按键不会覆盖新的鼠标动作。请求过程中其他方向按钮暂时禁用，当前触屏按住的按钮与 STOP 保持可用。
-
-当焦点在滑块、输入框或可编辑区域内时，键盘保留原生操作，包括空格；点击空白处后再进行键盘遥控。Ctrl / Command / Alt 快捷键和输入法输入不会触发移动。切换窗口、隐藏标签页或离开页面时，鼠标与键盘动作都会停止续发心跳，并尝试发送停止请求。
-
-### 超时停止（v0.4）
-
-每次移动后，后端返回这次动作的 `command_id`。发起动作的页面收到确认后，才每 500 毫秒携带这个编号发送心跳。心跳只延长当前动作的有效期，不会启动、改变或恢复移动；另一个页面读取状态也不会接管续期。
-
-后端使用独立的后台任务，每 100 毫秒检查一次：从移动指令或最近一次有效心跳开始计时，满 2 秒没有续期就调用 `motor.stop()`。因此，即使浏览器断网、关闭或崩溃，仍在运行的后端也会撤销输出。检查间隔及服务调度会带来少量延迟。v0.6 真实模式仍依赖程序与系统运行，不能保证强杀进程或系统卡死时 GPIO 归零；台架必须保留手边可断开的电机电源。
-
-页面每秒读取 `/api/status`，使 Auto-stop、Direction 和 Speed 跟上后端的超时停止。读取状态不会续期。移动、心跳或状态请求失败时，页面取消自动续期并尝试 STOP；恢复网络后不会自动恢复移动，需要重新点击方向或松开并重新按键。关闭页面的 STOP 请求只能尽力送达，未送达时由后端超时处理。
-
-## Camera preview (OpenCV / Picamera2)
-
-默认后端为 `opencv`，读取电脑/USB 摄像头（编号 `0`）。树莓派 OV5647 CSI 使用 `python -m server.run --lan --camera picamera2`；完整依赖、启动、故障排查和网页验收见 [树莓派 CSI 预览](docs/pi-camera.md)。也可通过 `HOMEBOT_CAMERA=picamera2` 选择，命令行 `--camera` 优先。Picamera2 仅在点击开启或执行检查时导入，未安装它的电脑仍可使用默认后端。两个后端共用下列网页流程和 JPEG API。
-
-1. 启动 Homebot 并打开页面，摄像头初始为关闭状态。
-2. 点击 **Start camera**。程序读取运行 FastAPI 的电脑或树莓派上所选后端的摄像头，不是访问网页的手机或另一台电脑的摄像头。
-3. macOS 首次使用时，先按下面的“首次授权检查”在终端完成权限与读图检查。在系统询问时，为启动 Python 的终端或应用授权。
-4. 默认虚拟模式下，看到画面后仍可点击移动按钮，电机只在终端打印。
-5. 点击 **Stop camera** 释放摄像头。切换到其他标签页或隐藏页面也会尝试关闭；重新显示页面后需手动开启。
-
-关闭页面时会发送一次尽力而为的停止请求，断网或浏览器崩溃时不能保证送达。可以重新打开页面点击 Stop camera，或在服务终端按 `Ctrl+C` 释放摄像头。页面没有录制功能，程序不保存图片文件。
-
-预览使用连续 JPEG 请求，最多约每秒 5 张；拍摄、传输还会消耗时间，所以实际刷新率可能更低。使用一个浏览器控制页面和一个服务进程即可；多个页面共享同一个摄像头，任意页面关闭它都会影响其他页面。
-
-如果显示 Cannot open camera，检查摄像头连接、系统权限以及是否被其他应用占用。这个提示不会影响虚拟电机控制。摄像头来源始终是运行服务的电脑；手机可以通过同一 Wi-Fi 查看预览，本版不提供公网远程访问配置。
-
-### 首次授权检查（v0.2.1）
-
-先关闭网页摄像头。在项目目录激活 `.venv` 后，执行：
-
-```bash
-python -m server.camera --check
-```
-
-命令在 Python 主线程中尝试打开默认摄像头、读取一张 JPEG，然后释放设备，不保存或打印画面。成功时输出 `Camera OK (opencv): received ... JPEG bytes. No image saved.` 和 `Camera released.`，退出码为 0；失败时给出检查建议，退出码为 1。
-
-macOS 首次请求权限可能先弹出授权框、随后本次命令返回失败；允许后再运行一次检查。若已拒绝授权，请到“系统设置 → 隐私与安全性 → 摄像头”检查启动 Python 的应用，再重试。尽量从同一个终端应用运行检查和 Uvicorn，因为权限与启动应用有关。看到 Camera OK 后，再在网页点击 Start camera。
-
-这样做的原因：首次从 FastAPI 工作线程打开设备时，本机出现 OpenCV 无法在该线程处理 macOS 授权的错误；主线程检查成功后，网页能够正常读取。[OpenCV 的 macOS 采集实现说明](https://github.com/opencv/opencv/issues/24624)包含对应的权限分支。
-
-v0.2.1 还修复了读图、编码或设备设置异常后的资源释放。网页摄像头请求超过 10 秒会报错；开启失败时还会尝试关闭设备，因此整个失败处理可能持续约 20 秒。HTTP 请求超时不等于底层设备调用已经取消：如果页面提示 Stop not confirmed，可重试 Stop camera，或停止服务。页面的 Camera not working? 中也有排查步骤。
-
-静态脚本和样式地址带有 `?v=0.7.1`，避免升级后浏览器复用旧文件。以后发布新版本时，要同步更新这些地址的版本号。
-
-## Project structure
-
-```text
-homebot_v1/
-├── README.md
-├── ROADMAP.md       # 按版本记录目标、完成标准与用户验收
-├── requirements.txt
-├── .gitignore
-├── docs/
-│   ├── v0.6-bench.md # 单电机台架步骤与原始实机反馈
-│   ├── v0.7-drive.md # 双轮接线、停止、校准与分阶段验收
-│   ├── v0.7.1-calibration.md # 左右 PWM 独立校准与实机记录
-│   └── pi-camera.md # 现有 Picamera2 CSI 预览的独立说明
-├── server/
-│   ├── main.py       # 接收 HTTP 请求、心跳与后台超时停止、提供静态网页
-│   ├── run.py        # 局域网启动、访问码与手机访问地址
-│   ├── access.py     # 网页与 API 的访问验证、请求来源检查
-│   ├── camera.py     # 打开摄像头、读取 JPEG、释放设备、命令行检查
-│   ├── motor.py      # 电机能力约定和打印动作的实现
-│   ├── drv8833.py    # 当前 DRV8833 A 通道驱动：输入 PWM 与休眠控制
-│   ├── drive.py      # DRV8833 双轮、方向与单侧 PWM 校准
-│   └── tb6612.py     # 保留给 TB6612FNG 硬件的 A 通道 GPIO 驱动
-├── web/
-│   ├── index.html   # 按钮、滑块、状态与自动停止提示
-│   ├── style.css    # 页面样式
-│   └── app.js       # 鼠标/键盘/触屏、心跳、状态轮询与摄像头预览
-└── tests/
-    ├── test_access.py    # 访问码验证与无访问码时的远程访问保护
-    ├── test_bench.py     # 单电机模式 API 限制、停止代号与故障处理
-    ├── test_chassis.py   # 双轮 API 限速、方向等待与输出故障锁定
-    ├── test_camera.py    # 使用替身测试，不打开真实摄像头
-    ├── test_run.py       # 局域网启动参数与地址提示
-    ├── test_motor.py     # GPIO 替身验证 TB6612 驱动的输出和清理
-    ├── test_drv8833.py   # GPIO 替身验证 DRV8833 的 PWM、唤醒和清理
-    ├── test_drive.py     # GPIO 替身验证双轮方向、极性与输出清理
-    ├── test_safety.py    # 测试后端心跳、超时与停止行为
-    └── test_controls.cjs # 使用请求与事件替身测试键盘、触屏、心跳和失败处理
-```
-
-`.venv` 是本机安装的 Python 环境，已通过 `.gitignore` 排除，不需要提交到 Git。
-
-## Architecture
+## How It Works
 
 ```text
 Browser
-   ↓
+   │
+   ▼
 JavaScript
-   ↓ HTTP
+   │
+   │ HTTP
+   ▼
+FastAPI
+   │
+   ▼
+Motor Controller
+   │
+   ▼
+Raspberry Pi GPIO
+   │
+   ▼
+DRV8833
+   │
+   ├── Left Motor
+   └── Right Motor
+```
+
+A movement command follows this path:
+
+```text
+Forward
+   ↓
+POST /api/move
+   ↓
 FastAPI
    ↓
-MotorController
-   ├── mock         → MockMotorController → Terminal output
-   ├── drv8833      → DRV8833MotorController → GPIO → DRV8833 A → 单电机
-   ├── tb6612       → TB6612MotorController → GPIO → TB6612 A → 单电机
-   └── drv8833-dual → DRV8833DriveController → GPIO → DRV8833 A/B → 左/右轮
+Motor Controller
+   ↓
+DRV8833
+   ↓
+Motors
 ```
 
-- **Browser**：显示用户操作界面；v0.5 局域网访问先通过原生验证框输入用户名和访问码。
-- **JavaScript**：读取点击和滑块的值，发送移动与心跳请求，定时读取状态。
-- **FastAPI**：校验方向和速度，调用 Python 方法；后台检查移动是否超时。
-- **MotorController**：定义机器人应有的移动能力，是一个简单的类约定。
-- **MockMotorController**：默认实现，用 `print()` 模拟电机。
-- **DRV8833MotorController**：当前模块在 Pi 上显式启用的驱动；用 AIN1/AIN2 输入 PWM、nSLEEP 休眠控制，只支持单电机正反转与停止，输出上限 40%。
-- **TB6612MotorController**：为 TB6612FNG 硬件保留的独立驱动，使用专用 PWMA；同样只支持单电机正反转与停止，输出上限 40%。
-- **DRV8833DriveController**：双轮模式，A 左/B 右，独立极性和 PWM 系数校准，输出上限 30%；不申请或读取 GPIO23。
-
-为什么不在 API 里直接操作 GPIO？API 处理动作、限制与超时，具体接线由驱动类负责。默认 `motor` 是 `MockMotorController`，`motor.forward(0.5)` 只打印；选择与实际硬件和接线匹配的真实模式后，通过同一方法约定驱动 GPIO。驱动报告支持的方向和输出上限，网页据此调整单电机或双轮控制。
-
-基类中的 `raise NotImplementedError` 表示“这个能力需要由子类实现”。它本身不驱动任何东西；`motor: MotorController` 是类型提示，运行时执行启动时选择的具体实现。下面的 50% 数据流例子只用于虚拟模式。
-
-### 跟着一次点击读数据流
-
-1. `index.html` 的前进按钮带有 `data-direction="forward"`。
-2. `app.js` 的点击监听器读取 `button.dataset.direction`。
-3. `sendMove()` 把滑块的 `50` 除以 `100`，用 `fetch()` 发送：
-
-   ```json
-   { "direction": "forward", "speed": 0.5 }
-   ```
-
-4. `main.py` 的 `MoveRequest` 校验 JSON；`move()` 调用 `motor.forward(command.speed)`。
-5. `motor.py` 的 `forward()` 打印：
-
-   ```text
-   [HOMEbot] Moving forward
-   Left motor: 50%
-   Right motor: 50%
-   ```
-
-6. 后端更新 `status`，为这次移动生成 `command_id` 并开始计时；返回 JSON 后，`app.js` 的 `renderStatus()` 将状态显示在页面上。
-7. 页面为自己已确认的动作定时发送心跳；如果有效心跳中断，后端后台任务会停止虚拟电机。
-
-### 跟着一次按键读数据流
+The browser also sends periodic heartbeats while the robot is moving.
 
 ```text
-按下 W → keydown → keyDirections.KeyW → sendMove("forward")
-       → processMoves() → POST /api/move → 虚拟电机 → 网页状态
-松开 W → keyup → sendMove("stop") → 同一个接口 → Stop / 0%
+Move
+ ↓
+command_id
+ ↓
+Heartbeat
+ ↓
+Watchdog
+ ↓
+Heartbeat lost
+ ↓
+STOP
 ```
 
-`activeKey` 记录哪个按键正在控制方向，`event.repeat` 用来忽略长按产生的重复事件。`pendingMoves` 是一个普通 JavaScript 数组，保存等待发送的指令；`processMoves()` 每次发一条，等待回复后再发下一条。STOP 会清掉尚未发送的移动指令，然后排在当前请求之后，避免一次很短的按键让停止指令被丢弃。鼠标和键盘仍共用 `/api/move`；v0.4 另用 `/api/heartbeat` 维持已确认的动作。
+If the browser disconnects or heartbeats stop, the backend automatically stops the motors.
 
-### 跟着一次触屏操作读数据流（v0.5）
+### Project Structure
 
 ```text
-手指按住方向 → pointerdown → sendMove(direction) → POST /api/move
-手指松开或触屏取消 → pointerup / pointercancel → sendMove("stop")
+HomeBot/
+├── server/
+│   ├── main.py       # API, control state and watchdog
+│   ├── run.py        # Server startup
+│   ├── camera.py     # Camera
+│   ├── motor.py      # Motor abstraction
+│   ├── drv8833.py    # Single motor driver
+│   └── drive.py      # Dual motor control
+│
+├── web/
+│   ├── index.html
+│   ├── style.css
+│   └── app.js        # Controls, heartbeat and camera
+│
+├── tests/
+├── docs/
+└── README.md
 ```
 
-触屏和触笔使用 Pointer Events 区分按住与松开；移动确认后沿用现有心跳。鼠标仍走点击控制，避免把手机松手后产生的点击再当作一次移动。访问验证发生在处理请求之前，因此页面、控制接口和摄像头都使用同一访问码。
+---
 
-### 跟着一次心跳读数据流（v0.4）
+## Hardware Setup
+
+### Hardware
+
+| Component     | Choice                               | Purpose                  |
+| ------------- | ------------------------------------ | ------------------------ |
+| Main computer | Raspberry Pi 4B                      | Runs Homebot backend     |
+| Motor driver  | DRV8833                              | Drives two DC motors     |
+| Motors        | 2 × DC geared motors                 | Differential drive       |
+| Camera        | Raspberry Pi CSI Camera / USB Camera | Video preview            |
+| Pi power      | USB power bank                       | Powers Raspberry Pi      |
+| Motor power   | AA battery pack                      | Independent motor supply |
+| Chassis       | Two-wheel robot chassis              | Robot platform           |
+
+The Raspberry Pi and motors use separate power supplies, while the Raspberry Pi and DRV8833 share a common ground.
+
+### Wiring
+
+Basic architecture:
 
 ```text
-POST /api/move → 后端开始移动，返回 command_id
-       ↓
-页面确认自己的动作 → 每 500ms POST /api/heartbeat {command_id}
-                                      ↓
-                        仅当前且未过期的编号可续期
-
-后端每 100ms 检查 → 满 2s 未收到有效心跳 → stop() → timeout
-页面每 1s GET /api/status → 显示最新状态（不续期）
+                 ┌────────────────────┐
+                 │  Raspberry Pi 4B   │
+                 │                    │
+                 │ GPIO ──────────────┼──────────────┐
+                 │                    │              │
+                 │ GND ───────────────┼──────────┐   │
+                 └────────────────────┘          │   │
+                                                 │   │
+                                      ┌──────────▼───▼──────┐
+                                      │      DRV8833        │
+                                      │                     │
+                         Motor Power ─▶│ VM                  │
+                                      │                     │
+                                      │ AOUT1 / AOUT2       │
+                                      │      │              │
+                                      │      ▼              │
+                                      │  Left Motor         │
+                                      │                     │
+                                      │ BOUT1 / BOUT2       │
+                                      │      │              │
+                                      │      ▼              │
+                                      │  Right Motor        │
+                                      └─────────────────────┘
 ```
 
-为什么心跳要带动作编号？如果先前动作的慢心跳请求在 STOP 或新动作之后才到达，后端必须知道它已经失效。`command_id` 只标识一次动作，不是密码或用户身份；请把它当作不可拆解的字符串，原样传回即可。
-
-### 摄像头数据流
+Power layout:
 
 ```text
-Start camera → POST /api/camera/start → CameraController.start()
-浏览器 → GET /api/camera/frame → read() / capture_array("main") → JPEG → <img>
-         ↑                 200ms 后请求下一张              ↓
-         └───────────────────────────────────────────────┘
-Stop camera → POST /api/camera/stop → release() / stop() + close()
+USB Power Bank
+      │
+      ▼
+Raspberry Pi
+
+AA Battery Pack
+      │
+      ▼
+DRV8833
+      │
+      ├── Left Motor
+      └── Right Motor
+
+Raspberry Pi GND ───── DRV8833 GND
 ```
 
-`camera.py` 中的 `get_frame()` 获取一张画面，`cv2.imencode()` 将它转换为浏览器认识的 JPEG。`main.py` 的 `Response(..., media_type="image/jpeg")` 返回图片，而不是 JSON。`app.js` 用 `response.blob()` 读取图片，通过 `URL.createObjectURL()` 给 `<img>` 设置临时地址；旧地址及时释放，避免一直占用内存。
+Camera:
 
-`Lock` 只用于避免两个摄像头请求同时读或关闭同一个设备。摄像头路由使用普通 `def`，由 FastAPI 在工作线程中执行；摄像头读图时仍能处理移动指令。`lifespan()` 启动后台超时检查，并在服务退出时停止电机、结束后台检查和关闭摄像头。
-
-JavaScript 的 `await` 表示等待请求结果；Python 路由上的 `async def` 是 FastAPI 支持的异步函数写法。v0.4 增加了一个后台异步任务，因此即使没有新的 HTTP 请求到达，也能检查并停止超时的动作。它仍在同一个服务进程中运行，不需要消息服务。
-
-## API
-
-v0.5 启用访问码时，以下接口以及摄像头接口、页面和 `/docs` 都需要 HTTP Basic 验证：用户名 `homebot`，密码为启动终端中的访问码。未验证或密码错误会返回 HTTP 401。浏览器验证后可继续使用页面和交互文档；访问码不放在 JSON 请求体或 URL 中。未设置访问码时只允许本机访问，远程请求返回 HTTP 503。服务会拒绝其他网站发来的跨来源请求，返回 HTTP 403；请直接打开 Homebot 页面操作。
-
-`GET /api/status` 返回当前进程中的状态。v0.7.1 虚拟模式的初始状态示意如下，`control_epoch` 每次启动实际生成新的字符串：
-
-```json
-{
-  "connected": true,
-  "direction": "stop",
-  "speed": 0,
-  "battery": 100,
-  "command_id": null,
-  "stop_reason": null,
-  "watchdog_timeout_ms": 2000,
-  "motor_mode": "mock",
-  "supported_directions": ["forward", "backward", "left", "right", "stop"],
-  "max_speed": 1.0,
-  "fault": null,
-  "control_epoch": "本次服务生成的当前代号",
-  "left_inverted": null,
-  "right_inverted": null,
-  "left_scale": null,
-  "right_scale": null
-}
+```text
+Raspberry Pi
+     │
+     │ CSI
+     ▼
+Camera Module
 ```
 
-`POST /api/move` 接收 `direction` 和 `speed`，返回执行后的状态。v0.4 保留原有四个字段，并增加：
+Detailed GPIO pin assignments and hardware testing procedures are kept in local documentation (excluded from this repository):
 
-| 字段 | 含义 |
-| --- | --- |
-| `command_id` | 每次有效非零输出移动生成的新字符串；停止或故障撤销动作时为 `null` |
-| `stop_reason` | 初始或移动中为 `null`；手动停止为 `"manual"`，心跳超时为 `"timeout"`，关闭清理为 `"shutdown"`；v0.6 故障处理为 `"fault"` |
-| `watchdog_timeout_ms` | 心跳超时阈值，本版固定为 `2000` 毫秒 |
-
-v0.6 引入模式与控制字段，v0.7 增加双轮能力与极性信息，v0.7.1 增加独立 PWM 系数：
-
-| 字段 | 含义 |
-| --- | --- |
-| `motor_mode` | `"mock"`、`"drv8833"`、`"tb6612"` 或 `"drv8833-dual"`，与真实模块及接线一致 |
-| `supported_directions` | 虚拟/双轮为四方向与 `stop`；单电机仅 `forward`、`backward`、`stop` |
-| `max_speed` | 虚拟 `1.0`，单电机 `0.4`，双轮 `0.3`，表示最大 PWM 输出比例 |
-| `battery` | 虚拟占位 `100`；真实模式 `null`，电量未测量 |
-| `fault` | 正常为 `null`，驱动故障为错误文字；锁定至服务重启 |
-| `control_epoch` | 当前控制代号；STOP、超时和故障处理会更新，使更早的移动失效 |
-| `left_inverted` / `right_inverted` | 双轮模式为布尔值，对应启动时左右轮极性参数；其他模式为 `null` |
-| `left_scale` / `right_scale` | 双轮模式为 `0 < scale <= 1` 的数值，默认 `1.0`；其他模式为 `null`，只读启动配置 |
-
-真实模式的非 STOP 请求必须带当前 `control_epoch`。从状态响应原样读取后使用，例如：
-
-```json
-{ "direction": "forward", "speed": 0.2, "control_epoch": "原样填写当前状态中的代号" }
+```text
+docs/
+├── v0.6-bench.md
+├── v0.7-drive.md
+├── v0.7.1-calibration.md
+└── pi-camera.md
 ```
 
-代号缺失或过期返回 HTTP 409；虚拟模式保留不带代号的旧调用方式，但传了就必须匹配。STOP 仍可执行，不因旧代号拒绝。`command_id` 用于给已确认动作续期，`control_epoch` 用于阻止 STOP 之前的延迟移动，二者用途不同。
+This README only shows the overall hardware architecture. Obtain and follow the detailed wiring documentation before powering the motors.
 
-单电机模式左右转或超过 40% 返回 422；双轮支持四方向，但超过 30% 返回 422。单电机反向、或双轮任何方向变化之前，没有 STOP 或 STOP 后不足 0.5 秒，返回 409。程序不检测轮轴的实际转速，仍需人观察完全停下。有效方向的 `speed: 0` 按停止处理并更新代号。
+---
 
-双轮模式不读取 GPIO23，也不需要实体停止检测回路。后台每 100ms 检查动作心跳，2 秒没有有效心跳就尝试撤销输出；GPIO 输出或停止失败时仍会设置故障并锁定控制，STOP 可重试但不清除故障。没有复位 API：保持 VM 断开、处理原因并重启服务，确认输出关闭后才恢复供电。invert 与 scale 参数仅支持双轮模式，不会自动保存，下次启动需保留已校准的完整命令；没有在线修改系数的 API。
+## Built With
 
-驱动或 STOP 故障返回 503，并设置 `fault`、`connected: false`。如果 STOP 本身失败，状态为 `direction: "unknown"`、`speed: null`，后台每 0.5 秒继续尝试停止；即使后续 STOP 成功，故障锁定也不会解除。先切断电机电源并排查，再重启服务，不能依靠不断重试移动恢复。
+### Software
 
-服务关闭后的接口已不可访问，`shutdown` 表示后端清理阶段的状态，不保证浏览器能读取到。
+- **Python**
+- **FastAPI**
+- **Uvicorn**
+- **HTML / CSS / JavaScript**
+- **OpenCV**
+- **Picamera2**
 
-| direction | Python 方法 | 左 / 右电机 |
-| --- | --- | --- |
-| forward | forward(speed) | +speed / +speed |
-| backward | backward(speed) | -speed / -speed |
-| left | turn_left(speed) | -speed / +speed |
-| right | turn_right(speed) | +speed / -speed |
-| stop | stop() | 0 / 0 |
+### Hardware
 
-上表用于虚拟模式，以及方向校准后的双轮动作；双轮实际输出还分别乘 `left_scale` / `right_scale`，极性翻转只改变符号。状态 `speed` 仍为基础 PWM，不是轮速；例如基础 `0.25`、左右系数 `0.98` / `1`，前进输出幅度为 `0.245` / `0.25`。网页显示系数为左 98%、右 100% 并说明计算方式，不显示实时两侧输出数值。单电机 Forward/Backward 仅表示单电机两种旋转方向。请求速度范围为 0.0～1.0，真实单电机再限制为不超过 0.4，双轮基础输出不超过 0.3，校准不能放宽请求上限；非法方向、越界速度或缺少必填字段返回 HTTP 422，不执行移动。STOP 忽略请求中的有效速度值，停止调用成功后状态速度归零。虚拟左转 30% 时打印左电机 -30%、右电机 30%。
+- **Raspberry Pi**
+- **DRV8833**
+- **GPIO Zero / lgpio**
+- **CSI / USB Camera**
+- **DC geared motors**
 
-`POST /api/heartbeat` 接收移动响应中的编号：
+### Core Concepts
 
-```json
-{ "command_id": "原样填写本次移动响应中的字符串" }
+Homebot currently uses several mechanisms that will also be useful for later autonomous control:
+
+```text
+REST API
+Motor abstraction
+Heartbeat
+Watchdog
+Control epoch
+Camera input
+PWM motor control
 ```
 
-只有编号匹配当前移动、且距离上次移动或有效心跳尚未满 2 秒，心跳才续期。格式正确的心跳均返回 HTTP 200 和当前状态；缺少编号、空字符串或类型错误返回 422。旧编号、已停止或已超时动作的心跳不能恢复移动，也不能延长新动作。手动调用 API 时，每次移动后也需要定时发送对应心跳；仅重复读取 `/api/status`，移动仍会超时停止。
+The separation between the web interface, control logic and hardware drivers makes it possible to replace manual control with higher-level control algorithms later.
 
-状态只保存在内存，重启后恢复初始值，不恢复之前的移动。请按教程使用单个服务进程，真实模式禁止 `--reload` 和多 worker。页面每秒读取状态，每次移动和心跳后也会处理返回状态。多个页面共享同一组电机状态；新移动会替换旧动作编号，STOP 会撤销当前动作。读取到另一个页面的动作编号不会让本页面自动替它发送心跳。
+---
 
-滑块只选择下一次动作的速度，拖动本身不发送移动指令。请求过程中其他方向按钮暂时禁用，当前触屏按住的按钮与 STOP 保持可用。移动请求限时 5 秒，心跳请求限时 1.5 秒；请求失败时取消自动续期、丢弃等待中的移动并尝试一次停止。停止也失败时显示错误，恢复连接后需重新操作。浏览器超时不等于后端已取消原请求；后端独立计时，处理缺少有效心跳的动作。
+## What's Next
 
-## Acceptance tests
-
-以下 v0.1～v0.5 清单与记录用于虚拟电机及原电脑摄像头；其中 50% 不适用于真实模式。v0.6 实测记录见 [单电机台架](docs/v0.6-bench.md#6-用户逐步验收)，双轮基本验收用 [分阶段清单](docs/v0.7-drive.md#7-用户逐步验收)，当前独立 PWM 校准用 [v0.7.1 清单](docs/v0.7.1-calibration.md#4-用户验收与记录)。虚拟模式启动后，可在浏览器和服务终端之间对照检查：
-
-| 测试 | 操作 | 预期结果 |
-| --- | --- | --- |
-| 1 | 打开 `http://localhost:8000`（或选择的 8001 端口） | 看到 HOMEbot / Remote Control、摄像头开关、按钮、滑块和 Connected |
-| 2 | 选择 50%，点击 ↑ Forward | 终端打印 Moving forward，左右电机均为 50% |
-| 3 | 查看网页 Status | Direction: Forward，Speed: 50% |
-| 4 | 点击 ← Left | 终端打印 Turning left，左 -50%、右 50%；网页显示 Left |
-| 5 | 点击 STOP | 终端打印 Stopped，左右为 0%；网页显示 Stop、0% |
-
-2026-09-10 的 v0.1 验收已通过，当时摄像头区域为占位。验证环境：Python 3.13.15、FastAPI 0.141.1、Uvicorn 0.52.4。
-
-v0.2 摄像头接口：
-
-| 请求 | 返回 |
-| --- | --- |
-| `POST /api/camera/start` | `{"active": true}`；失败返回 503 和原因 |
-| `GET /api/camera/frame` | 一张 JPEG；未开启或读图失败返回 503 |
-| `POST /api/camera/stop` | `{"active": false}`；重复关闭也可成功；设备关闭失败返回 503 和原因，可重试 |
-
-新增验收：开启后能看到刷新画面；关闭后图片消失且摄像头释放；再次开启可恢复；没有摄像头或权限不足时显示错误，移动控制仍可使用。
-
-不连接摄像头也能运行自动测试：
-
-```bash
-python -m unittest discover -s tests -v
+```text
+Remote Control
+      ↓
+Camera
+      ↓
+Dual Motor Drive
+      ↓
+PWM Calibration
+      ↓
+Video Streaming
+      ↓
+Computer Vision
+      ↓
+Autonomous Driving
+      ↓
+Navigation
 ```
-
-摄像头测试使用 OpenCV / Picamera2 设备替身，验证真实 JPEG 编解码与颜色顺序、延迟导入、后端选择、重复开关、未开启读图、配置/读取/编码失败清理、关闭失败重试、并发读图与停止，以及真实 ASGI 路由的 JPEG/503 契约和服务退出清理。v0.4 新增的 `test_safety.py` 验证虚拟电机心跳和超时停止。真实设备和系统权限需要在自己的电脑上通过 Start camera 验证。
-
-2026-09-11 验证记录：6 项自动测试通过；浏览器中的 50% 前进、左转和 STOP 回归通过，并核对了终端输出；临时测试服务提供的带帧编号图片能持续刷新，关闭后消失、再次开启后恢复。测试服务仅用于验证，不是项目功能。尚未开启本机真实摄像头，真实画面及系统权限未验证。
-
-### v0.2.1 验证记录（2026-09-12）
-
-| 检查 | 本机结果 |
-| --- | --- |
-| 初始权限问题 | 复现工作线程不能处理 macOS 首次授权的错误；主线程检查成功后网页可用 |
-| `python -m server.camera --check` | 成功读取真实 JPEG，退出码 0，检查后释放设备 |
-| 真实网页预览 | 640×480 图片成功解码；两次读取的图片地址不同，确认持续刷新 |
-| 关闭和重新开启 | 关闭后画面消失；再次开启后成功显示真实画面 |
-| 预览期间移动 | Forward / 50% 与 STOP / 0% 正常，终端输出对应动作 |
-| 预览期间停止服务 | 图片清空、按钮恢复，提示服务器不可达及 Stop not confirmed |
-| 自动测试 | 12 项通过，覆盖设备打开、设置、读取、编码异常以及命令行检查的资源释放 |
-| JavaScript | `node --check web/app.js` 通过；浏览器加载了带版本号的新脚本 |
-
-真实摄像头测试未保存画面。设备断开、权限不可用等错误分支通过替身测试覆盖，未进行真实设备物理拔插或主动撤销系统权限。最终交付时摄像头为关闭状态。
-
-### v0.3 验收与历史验证记录
-
-| 操作 | 预期结果 |
-| --- | --- |
-| Speed 50%，按下 W 再松开 | 终端先打印 Moving forward / 50%，随后 Stopped / 0% |
-| 分别使用 S、A、D 和四个方向键 | 对应后退、左转、右转；松开后停止 |
-| 快速点按 W | 即使前进请求尚未返回，停止指令也会随后发出 |
-| 长按一个方向键 | 只发送一次移动，松开后发送停止 |
-| 移动时按空格，或点击 STOP | 网页最终显示 Stop / 0%，不会自动恢复先前的方向 |
-| 聚焦 Start camera 后按空格 | 发送电机停止，不会开启摄像头 |
-| 聚焦 Speed 滑块后按方向键 | 只改变滑块数值，不发送移动指令 |
-| 按住方向键时切换窗口或标签页 | 尝试停止当前键盘动作 |
-
-开发者可额外运行键盘自动测试（需要 Node.js 18+，不需要 npm 安装）：
-
-```bash
-node --test tests/test_controls.cjs
-```
-
-Node.js 只用于上述测试，运行 Homebot 本身不需要 Node.js。测试执行真实的 `web/app.js`，通过可控的事件和 HTTP 替身验证按键映射、请求顺序、焦点、停止和错误恢复；v0.4 还覆盖心跳与状态轮询。
-
-2026-09-12 验证记录：11 项键盘与请求行为测试、12 项原有摄像头测试全部通过。实际浏览器逐项按下并松开 WASD 和四个方向键，终端均打印对应动作及随后停止；鼠标前进、空格停止、聚焦摄像头按钮时空格不误触、滑块方向键调速也通过。长按重复、多键切换、失焦和慢请求顺序由自动测试覆盖。交付页面为 Stop / 0%，滑块保留 50%，摄像头关闭。
-
-### v0.4 验收清单
-
-以下列出本版验收行为与预期结果；实际完成的检查见下方 2026-09-14 验证记录。前面的通过记录仅对应其注明的历史版本。
-
-| 操作 | 预期结果 |
-| --- | --- |
-| 打开页面 | 顶部 V0.4，状态包含 Auto-stop 与 2 秒超时说明 |
-| 点击 Forward，保持页面可见且聚焦超过 2 秒 | 正常持续移动；约每 500 毫秒发送当前动作心跳 |
-| 按住 W 超过 2 秒后松开 | 只发送一次前进指令，持续发送心跳；松开后停止且不再续期 |
-| 鼠标移动中切换窗口、隐藏标签页或离开页面 | 心跳停止，并尝试发送 STOP；切回后不自动恢复移动 |
-| 移动中断开浏览器与后端的连接，后端继续运行 | 最后一次有效心跳满 2 秒后，由后台检查停止虚拟电机；恢复连接显示 Stop / 0% 和超时原因，需要重新操作 |
-| 仅通过 API 发起移动，不发送心跳，不再访问接口 | 即使没有后续请求，后端也自动停止；随后读取状态得到 `stop_reason: "timeout"` |
-| 只在移动后重复读取 `/api/status` | 状态请求不延长动作，仍会超时停止 |
-| STOP 后或新动作开始后，再发送旧 `command_id` 的心跳 | 不会恢复旧动作，也不会为新动作续期 |
-| 两个页面打开，只有其中一个发起移动 | 另一页面可以看到状态，但不自动为该动作发送心跳 |
-| 移动或心跳请求失败、超时 | 页面取消自动续期并尝试 STOP，不排队自动重试移动；恢复连接需重新操作 |
-| 点击 STOP | 状态为 Stop / 0%，`command_id` 为 `null`，`stop_reason` 为 `"manual"` |
-| 移动中按 Ctrl+C 退出服务 | 后端清理过程调用电机停止并释放摄像头 |
-
-自动检查命令（不打开真实摄像头）：
-
-```bash
-python -m unittest discover -s tests -v
-node --test tests/test_controls.cjs
-node --check web/app.js
-```
-
-后端测试关注心跳续期、编号失效、超时停止和退出清理；前端测试关注只有已确认的本页面动作才能续期、STOP 与慢响应的顺序、失焦及失败后的停止。浏览器的真实断网和窗口切换仍可按上表手动检查，自动测试使用可控的请求和事件替身覆盖这些分支。
-
-### v0.4 验证记录（2026-09-14）
-
-- 27 项 Python 测试通过：15 项心跳、超时、请求校验和退出清理测试，以及 12 项原有摄像头测试。
-- 22 项 JavaScript 测试通过：原有键盘与慢请求行为，以及心跳续期、失败停止、旧回复隔离、轮询、离页和返回页面。`node --check web/app.js` 通过。
-- 本机独立测试服务（8004 端口）与真实浏览器验证：Forward / 50% 持续超过 2 秒、心跳持续成功；STOP 和 W 短按松开后均显示 Stop / 0%，终端动作一致；页面无 JavaScript 错误。
-- 从 `/docs` 单独发出 Left / 30% 后，不发送心跳、不再访问接口，终端仍打印 Stopped；返回控制页显示 Stop / 0% 和 Auto-stopped 提示，确认后台自动停止不依赖状态读取。
-- 移动时离开控制页后，接口状态为 Stop / 0%、`command_id: null`、`stop_reason: "manual"`；浏览器返回后没有自动恢复移动。
-
-本次没有开启真实摄像头，也没有实际切断电脑网络；摄像头回归、网络失败和窗口失焦由自动测试覆盖。测试结束时电机停止、摄像头关闭。
-
-### v0.5 开发验证记录（2026-09-16）
-
-- 55 项 Python 测试、33 项 JavaScript 测试通过，共 88 项；JavaScript 语法与差异格式检查通过。
-- 在本机浏览器检查了 320px、390px 竖屏和 844×390 横屏布局，没有横向溢出；390px 下方向按钮高度 60px，摄像头按钮与滑块操作区高度至少 44px。
-- 本机浏览器的鼠标 Forward / 50% 与 STOP / 0% 回归通过，没有 JavaScript 错误。触屏捕获、松开、取消、多指与合成点击由自动测试覆盖，真实手机触屏仍待下表验收。
-- 在临时回环地址服务上通过真实 HTTP 检查：未验证时页面、静态资源、API、摄像头和文档受保护；正确访问码可访问；跨源移动请求被拒；有效心跳和 2 秒超时停止正常。测试始终没有开启摄像头。
-
-上述检查只证明当时的代码与本机测试行为，未替用户完成真实手机、局域网或摄像头验收。临时测试服务已关闭；2026-09-16 记录时 v0.5 待用户确认、v0.6 尚未开始。当前已按用户后续指令进入 v0.6，不把这条历史记录改成手机实测通过。
-
-### v0.5 手机逐步验收（待用户确认）
-
-以下保留 v0.5 的虚拟电机验收清单，不是已通过的测试记录，也不适用于 v0.6 真实单电机的 40% 上限。当前页面版本为 V0.6；表内 V0.5 是当时验收目标。建议每步记下“通过”或出现的具体提示。
-
-| 步骤 | 需要用户做什么 | 完成标准 |
-| --- | --- | --- |
-| 1. 手机访问 | 按上面的局域网启动步骤操作，用同一 Wi-Fi 的手机打开终端地址，填写 `homebot` 和访问码 | 看到 V0.5、Local Wi-Fi、Connected、摄像头区域与控制按钮；竖屏可正常操作 |
-| 2. 错误访问码 | 新开无痕窗口，用正确用户名和错误访问码访问；也检查 `/api/status` 或 `/docs` | 被拒绝或再次提示验证，无法读取状态、使用接口或查看摄像头 |
-| 3. 摄像头 | 在已正确验证的页面点 Start camera，确认画面随电脑镜头前的物体变化；点 Stop camera，观察摄像头指示灯（如有），再开启一次 | 手机能看电脑实时画面；关闭后图片消失、电脑摄像头释放；重新开启可恢复 |
-| 4. 50% 方向 | 设置 Speed 50%，依次按住前进、后退、左转、右转；其中一次保持超过 2 秒 | 页面与终端显示对应方向和 50%；按住时持续移动，松开后 Stop / 0% |
-| 5. STOP 与触屏取消 | 再次按住方向，操作 STOP；也检查手指离开按钮后松开、系统取消触屏操作 | 动作停止；松手后不会因额外点击事件又恢复移动 |
-| 6. 锁屏或断网 | 移动时锁屏，或断开手机 Wi-Fi，电脑服务继续运行；对照电脑终端 | 电机停止；若页面 STOP 未送达，最后有效心跳满 2 秒后由后端停止，检查间隔可能有少量延迟 |
-| 7. 恢复与收尾 | 解锁或重新连上 Wi-Fi，回到页面；确认状态，再点 STOP 和 Stop camera | 不自动恢复旧动作；必须重新按住方向才移动；测试结束电机停止、摄像头关闭 |
-
-如果设备没有摄像头或还未授权，先完成访问与虚拟电机检查，再按“首次授权检查”处理；未测的手机视频部分不能写为通过。当前已按用户本次指令开展 v0.6，真实电机请改用台架验收步骤，不把此表的 50% 或左右转操作用于真实模式。
-
-开发时的自动检查仍可使用：
-
-```bash
-python -m unittest discover -s tests -v
-node --test tests/test_controls.cjs
-node --check web/app.js
-```
-
-新增的 `test_access.py` 和 `test_run.py` 检查访问保护、局域网启动和参数；JavaScript 测试增加触屏按住、松开与取消行为。替身测试和本机浏览器检查不能代替上表中的真实手机、Wi-Fi 和摄像头验证。
-
-### v0.6 验收范围
-
-`test_motor.py` 与 `test_drv8833.py` 用 GPIO 替身检查对应单电机驱动，`test_bench.py` 检查模式限制、停止代号、反向等待与故障处理；不会给真实 GPIO 或电机通电。实际 Pi 安装、电源测量、断电接线和单电机运行仍需用户完成 [台架验收表](docs/v0.6-bench.md#6-用户逐步验收)。软件开发检查与实机结果分别记录，未执行的项目不写为通过。
-
-### v0.6 开发验证记录（2026-09-25）
-
-- 88 项 Python 测试、45 项 JavaScript 测试通过；JavaScript 语法和差异格式检查通过。
-- 本机浏览器使用纯 `MockMotorController` 替身模拟单电机能力，验证了滑块初值 20%、上限 40%、左右按钮禁用、正转输出命令、直接反向的 409 拒绝与随后 STOP、提示保留、等待后手动反向，以及 STOP。
-- 同一模拟服务的 390×844 浏览器视口没有横向溢出。该检查没有加载 GPIO，也没有开启摄像头。
-- 默认虚拟模式浏览器回归通过：显示 Mock，滑块默认 50%、上限 100%，左转 50% 与 STOP 归零正常；摄像头保持关闭。单电机模拟页和虚拟页未读到控制台错误或警告，临时服务均已正常退出。
-
-这些是软件与模拟控制验证；尚未验证 Pi 上依赖安装、真实 GPIO、用户电源电压、轴转动与停止，不能据此认定 v0.6 实机完成。实际台架验收等待用户按文档执行并确认。
-
-### v0.6 DRV8833 软件验证记录（2026-10-03）
-
-- 140 项 Python 测试、59 项 JavaScript 测试通过；`node --check web/app.js` 通过，启动器帮助正确列出 `mock`、`drv8833` 和 `tb6612`。
-- 新增 15 项 DRV8833 GPIO 替身测试，覆盖正反向输入 PWM、40% 上限、唤醒等待、停止/退出，以及初始化和输出阶段异常后的清理；后端和前端测试覆盖新模式的选择与单电机限制。
-- 默认仍为 `mock`；当前模块显式选择 `drv8833` 后，页面显示 **DRV8833 · Single motor bench**。TB6612 驱动保留，硬件与命令分别说明。
-
-以上记录来自当时的自动软件测试，没有给真实 GPIO 或电机通电，也没有人工浏览器验收；后续用户实机反馈单独记录如下，不将软件测试改记为硬件测试。
-
-### v0.6 DRV8833 用户实机反馈（2026-10-03）
-
-用户确认单电机台架测试成功：点击 **Forward** 时电机可以转动，点击 **Backward** 时电机可以反向转动。这两项记为实机通过。
-
-同日补充：每次先 STOP 停稳，再调滑块并按方向按钮；PWM 设置 16% 以下不转、17% 起转费劲、18% 及以上在已测范围能转动并随设置改变速度。这反映当前台架从静止起转的门槛，双向阈值及电源/负载条件仍未分别记录，不固化成软件下限；代码没有在该区间截断 PWM，后续仍从默认 20% 起步。
-
-逐档测试间的 STOP 后停稳步骤已由用户确认；松手、锁屏/断网、正常退出和重启不恢复动作等结果未分别记录，VM 测量值仍未记录。原始清单与反馈见 [台架验收](docs/v0.6-bench.md#6-用户逐步验收)。用户随后明确确认单电机测试通过并要求升级 v0.7，当前按该确认进入双轮阶段。
-
-### v0.7 原按钮方案开发验证记录（2026-10-04，后已取消按钮要求）
-
-- 180 项 Python 测试、69 项 JavaScript 测试通过；双轮 GPIO 与实体检测使用替身，不给真实电机通电。
-- 本机浏览器使用纯 `MockMotorController` 替身模拟双轮能力，确认 V0.7、双轮模式、20% 初值、30% 上限与左右极性显示。Forward 后直接 Left 返回 409，随后停止并保留提示；等待后手动 Left 正常。
-- 模拟 NC 开路后后台锁定，四方向按钮禁用而 STOP 保持可用；恢复模拟信号并发 STOP 仍保留故障锁定。
-- 390×844 视口无横向溢出，未读到页面错误或警告；摄像头全程关闭，临时服务已正常退出。
-
-以上为取消按钮要求之前的历史验证，不代表当前仍有 GPIO23 检测功能。用户随后明确说明未购买实体停止按钮并要求取消，本版已移除该输入、故障检查、接线及验收要求。后续用户实机结果另记如下；当前组装与低速落地步骤见 [v0.7 文档](docs/v0.7-drive.md#6-小车组装与低速落地)。
-
-### v0.7 取消实体按钮后的开发验证（2026-10-04）
-
-- 169 项 Python 测试、69 项 JavaScript 测试全部通过；移除已取消的按钮检测测试，保留四方向、极性校准、限速、换方向等待、停止与 GPIO 输出故障清理的覆盖。
-- GPIO 替身集成验证：不提供 `Button`，并使 GPIO23 不可申请，双轮服务仍正常启动、初始输出关闭、移动返回 200、STOP 撤销两轮输出；驱动仅申请 BCM17、27、5、6、22。
-- 验证后台在无浏览器请求时仍处理 2 秒心跳超时；停止写入失败时仍报告未知输出、锁定并重试停止。页面保留输出故障锁定与迟到心跳回复隔离。
-- 未给真实 GPIO 或电机通电，也未将本次修改同步到 Pi；用户需同步后重启服务，再完成架空与低速实机验收。
-
-### v0.7 双电机用户实机反馈（2026-10-04）
-
-用户明确确认：“v0.7 双电机控制的台架测试已经成功验证了”，并计划下一步组装小车。双电机台架阶段记为实机通过；具体方向校准参数、各停止机制的逐项结果及电压测量值尚未分别提供，不补写为已测。当前继续 v0.7 的整车组装、装车后架空复核与低速落地验收；尚未将整车组装或落地移动记为完成，v0.8 未开始。
-
-### v0.7 装车后首次用户反馈（2026-10-04，方向问题后已解决）
-
-用户已装好车轮，进行了落地操作，并提供三张照片。当前实际动作如下：
-
-| 网页按钮 | 用户观察到的车身动作 |
-| --- | --- |
-| Forward | 右转，俯视顺时针 |
-| Backward | 左转，俯视逆时针 |
-| Left | 前进 |
-| Right | 后退 |
-
-用户还观察到前进、后退偏右，并判断左电机更快；尚无转速实测或左右独立 PWM 校准结果。Pi、充电宝和摄像头已放到车上但尚未固定，不能将整车安装记为完成。照片不足以确认 A/B 输出分别连接哪侧电机，也未提供本次完整启动命令。
-
-先按 [装车后方向排查](docs/v0.7-drive.md#装车后按钮与动作不一致的排查历史问题用户已确认解决) 核对 A 左/B 右与单轮极性，再固定部件、检查轮子阻力并低速复测。台架阶段通过记录保留；这是接线修正前的观察，后续结果见下面的视频反馈。
-
-### v0.7 视频与接线修正反馈（2026-10-04）
-
-用户确认电机线反接后前进、后退、左转、右转的对应问题已解决，但仍无法直行；提供视频 `IMG_1368.MOV`（约 27 秒）。视频前半段两段往返移动中，车身方向随位移逐渐变化，存在持续偏航。用户补充视频 PWM 约 25%，Pi 与充电宝仍未固定。视频没有控制界面及转速测量，不能据此确定每段按钮、准确 PWM 或哪侧电机 RPM 更高。
-
-该视频反馈时的 v0.7 给两轮相同 PWM，没有独立左右 PWM 校准或转速/航向反馈。后续用户要求加入独立校准并命名为 v0.7.1；先固定 Pi 与充电宝，检查两轮及支撑轮阻力与起动表现，再在同一地面以 25% 分别复测前进和后退，决定单侧输出补偿。方向对应已解决，不覆盖已验证的接线及方向参数；直行验收仍未完成，v0.8 未开始。原排查记录见 [视频复核](docs/v0.7-drive.md#视频复核方向已修正直行仍有偏航)。
-
-### v0.7.1 独立 PWM 校准（2026-10-04）
-
-按用户要求新增左右启动系数，默认 `1.0`，只允许减小单侧输出，应用于四方向并保留极性校准；网页只读显示左右系数及 PWM 计算方式，不显示实时两侧输出数值。
-
-- 179 项 Python、71 项 JavaScript 测试全部通过，覆盖系数校验、四方向与 invert 组合输出、30% 上限、停止及现有控制行为；代码复核未发现问题。
-- 本机浏览器使用纯虚拟电机模拟双轮能力，确认 V0.7.1、左右系数 98% / 100%、20% 初值、30% 上限与启动输出关闭；390px 手机宽度下校准说明正常换行，无横向溢出。
-- 未同步到 Pi，也未完成实机校准，不将新增功能记为直行已经解决。
-
-步骤及待填实测表见 [v0.7.1 文档](docs/v0.7.1-calibration.md)。
-
-## Learning path
-
-下面保留早期学习路径和练习，先在 `mock` 模式下操作；真实硬件不用于试改限制。建议先从 **`web/index.html`** 开始，然后沿着一次点击往后读：
-
-1. `web/index.html`：找到 `data-direction="forward"`，理解按钮怎样携带方向。
-2. `web/app.js`：看 `addEventListener("click", ...)` → `sendMove()` → `fetch()` → `renderStatus()`。重点理解 `/ 100`、`JSON.stringify()` 和 `await response.json()`。
-3. `server/main.py`：看 `MoveRequest`、`@app.post("/api/move")` 和 `move()` 中的分支。这里把网络指令变成方法调用。
-4. `server/motor.py`：对比基类和子类的 `forward()`，理解同一个方法名如何替换具体实现。
-5. 最后看 `web/style.css`，它只负责外观，不发送指令。
-
-### 第一个小练习
-
-只修改 `web/index.html`，把前进按钮的可见文字 `Forward` 改成 `前进`，保留 `data-direction="forward"`。刷新后点击它，观察终端仍然打印 `Moving forward`。
-
-想一想：为什么改变按钮上显示的文字，并不会改变发给后端的指令？先自己完成，不需要新增任何功能。
-
-阶段练习：读完电机类后预测 `turn_left(0.3)` 的输出；读完网页后把滑块默认值和初始百分比文字改为 30%。这些练习尚未替你实现。
-
-### v0.2 阅读顺序与练习
-
-先读 `server/camera.py` 的 `start()`、`get_frame()` 和 `stop()`；再读 `server/main.py` 的三个 camera 路由；最后从 `web/app.js` 的 `startCamera()` 跟到 `loadCameraFrame()`。
-
-小练习：找到 `setTimeout(loadCameraFrame, 200)`，自行把 `200` 改成 `1000`，同时修改页面中的刷新频率提示。观察刷新速度的变化，思考这与电机的 Speed 滑块有什么不同。这个练习尚未替你完成。
-
-### v0.2.1 阅读顺序与练习
-
-先看 `server/camera.py` 的 `check_camera()`：`try` 尝试使用设备，`except` 给出失败信息，`finally` 确保尝试释放。再看 `get_frame()` 如何释放失败的设备，最后看 `web/app.js` 的 `cameraRequest()` 和 `stopCamera()` 如何显示结果。
-
-这一版的数据流仍然是 摄像头 → JPEG → FastAPI → 网页；新增了失败分支：设备异常 → 释放设备 → HTTP 503 → 页面提示 → 用户重试。
-
-小练习：只修改命令行检查成功时的提示，增加一句“现在可以回到网页点击 Start camera”，然后运行检查。不要改变 `finally` 中的释放逻辑。思考：即使函数在 `try` 中执行了 `return`，为什么仍会打印 Camera released？这个练习尚未替你完成。
-
-### v0.3 阅读顺序与练习
-
-1. `web/index.html`：查看新增的键盘操作提示。
-2. `web/app.js`：先读 `keyDirections`，再读 `keydown` 与 `keyup` 两个监听器，理解按下和松开如何产生不同指令。
-3. 继续看 `sendMove()` 和 `processMoves()`：为什么已经在发送前进请求时，也必须记住随后产生的停止指令？
-4. `server/main.py`：沿用原来的 `/api/move`，它不需要知道指令来自鼠标还是键盘。
-
-小练习：在 `keyDirections` 中增加 `KeyI: "forward"`，让 I 也能前进。先自己判断：松开 I 是否需要再写一个专门的停止分支？再运行验证。这个练习尚未替你完成。
-
-### v0.4 阅读顺序与练习
-
-1. `server/main.py`：先看新增状态字段，以及 `/api/move` 如何为每次动作生成 `command_id` 并记录超时时间。
-2. 接着看 `/api/heartbeat`：找出匹配编号和判断是否过期的条件，理解为什么晚到的心跳不能恢复移动。
-3. 看 `lifespan()` 启动的后台检查：没有浏览器请求时，它如何每 100 毫秒继续检查并调用停止？退出服务时如何清理？
-4. `web/app.js`：跟踪移动响应中的 `command_id`，再找 500 毫秒心跳与 1 秒状态轮询。重点区分“保持自己的动作”和“读取所有页面共享的状态”。
-5. 沿 STOP、请求失败、窗口失焦和页面隐藏几个分支，查看它们怎样取消心跳，以及为什么重新连接不会自动恢复移动。
-6. `tests/test_safety.py` 与 `tests/test_controls.cjs`：把测试中的请求和时间变化对应到上面的流程。
-
-小练习：通过 `/docs` 发出一次移动，记下返回的 `command_id`，先不发送心跳，稍后读取状态并观察终端。再次移动后，在 2 秒内用 `/api/heartbeat` 传入新的编号，再比较停止时间；最后尝试传入第一次的旧编号。思考：为什么读取状态、旧编号心跳都不能延长当前动作？这个练习尚未替你执行。
-
-### v0.5 阅读顺序与练习
-
-1. `server/run.py`：看 `--lan` 如何选择监听地址、生成访问码，并把手机访问地址打印到终端；区分监听地址与手机实际访问的局域网 IP。
-2. `server/access.py`：理解页面和 API 为什么都必须在验证后处理，为什么未设置访问码的本机模式会拒绝远程请求。
-3. `web/app.js`：找方向按钮的 Pointer Events 监听器，对照按住、松开、取消如何调用现有移动与停止逻辑。
-4. `web/style.css`：查看手机布局与触控目标大小；再用手机横屏、竖屏检查是否容易操作。
-5. `tests/test_access.py`、`tests/test_run.py` 和 `tests/test_controls.cjs`：把正常访问、错误访问码、触屏释放等测试对应回实际操作。
-
-小练习：用 `--port 8001` 启动局域网模式，观察终端给出的手机地址，再尝试打开旧的 8000 端口。思考：为什么电脑上的 `localhost` 能打开，而手机的 `localhost` 不能访问这台电脑？这个练习尚未替你执行。
-
-### v0.6 阅读顺序与练习
-
-1. 先读 [单电机台架文档](docs/v0.6-bench.md)，区分 BCM 编号、物理针脚、逻辑电源和电机电源。
-2. `server/run.py`：看 `--motor` 的默认值如何保留虚拟模式，再看 `server/main.py` 如何在启动时选择驱动。
-3. `server/drv8833.py`：沿正转、停止、反转阅读 AIN1/AIN2 的 PWM 和 nSLEEP 控制，理解休眠、唤醒等待，以及撤销驱动为何不代表测得轴停止；需要比较不同硬件时再读 `server/tb6612.py` 的独立 PWMA。
-4. `server/main.py`：看模式上限、`control_epoch`、反向等待和故障锁定；区分拒绝指令与驱动故障。
-5. `web/app.js`：看页面如何根据支持方向和上限显示单电机控制，再对照故障时的未知状态。
-
-小练习只在虚拟模式进行：读取 `/api/status`，记下 `control_epoch`，执行 STOP 后再次读取并比较。思考：为什么旧移动请求与旧心跳要用两个不同的代号判断？真实台架按本文步骤验收，不把学习练习当作随意调整接线或取消限制的理由。
-
-### v0.7 阅读顺序与练习
-
-1. 先读 [双轮接线与停止方案](docs/v0.7-drive.md)，核对模块 NC 留空、GPIO23 不接线，以及断开电池盒供电连接/取出电池的手动断电。
-2. `server/drive.py`：跟踪 A 左/B 右的四个动作组合、两轮极性翻转，以及停止时的四路 PWM 和共用 nSLEEP。
-3. `server/main.py`：看双轮任何方向变化的等待条件、心跳超时停止，以及 GPIO 输出异常后的故障锁定与停止重试。
-4. `server/run.py` 与 `web/app.js`：查看 `--invert-left` / `--invert-right` 如何传到页面，为什么重启仍需保留已校准的参数。
-5. `tests/test_drive.py`、`tests/test_chassis.py`：区分替身测试能验证的软件行为，与需要观察实轮与检查供电才能确认的行为。
-
-小练习只阅读代码：先写出 Left 时左右轮的正负号，再预测开启 `--invert-left` 后哪一组 GPIO 输出变化。实际校准按文档逐步操作，不在车轮转动时改线。
-
-v0.6 和 v0.7 双电机台架测试已获用户确认通过，方向对应问题已解决；当前按用户要求进入 v0.7.1 独立 PWM 校准，待固定 Pi 与充电宝、实机校准及偏航复测。v0.8 未开始，等待 v0.7 整车验收及 v0.7.1 校准结果获用户确认，再按 [ROADMAP.md](ROADMAP.md) 推进。
